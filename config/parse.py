@@ -69,8 +69,12 @@ def normalize_config(config_file):
 
     # Default core elements
     # Give cores numeric indices
-    core_keys_to_copy = ('frequency', 'ifetch_buffer_size', 'decode_buffer_size', 'dispatch_buffer_size', 'rob_size', 'lq_size', 'sq_size', 'fetch_width', 'decode_width', 'dispatch_width', 'execute_width', 'lq_width', 'sq_width', 'retire_width', 'mispredict_penalty', 'scheduler_size', 'decode_latency', 'dispatch_latency', 'schedule_latency', 'execute_latency', 'branch_predictor', 'btb', 'DIB')
+    core_keys_to_copy = ('frequency', 'ifetch_buffer_size', 'decode_buffer_size', 'dispatch_buffer_size', 'rob_size', 'lq_size', 'sq_size', 'fetch_width', 'decode_width', 'dispatch_width', 'execute_width', 'lq_width', 'sq_width', 'retire_width', 'mispredict_penalty', 'scheduler_size', 'decode_latency', 'dispatch_latency', 'schedule_latency', 'execute_latency', 'branch_predictor', 'btb', 'DIB', 'gold_standard')
     cores = [util.chain(cpu, util.subdict(config_file, core_keys_to_copy), {'name': 'cpu'+str(i), '_index': i}) for i,cpu in enumerate(cores)]
+    
+    # Assuming the gold standard tester is used only for single cores
+    if 'gold_standard' in cores[0].keys():
+        cores[0]['branch_predictor'] = 'gold_standard'
 
     pinned_cache_names = ('L1I', 'L1D', 'ITLB', 'DTLB', 'L2C', 'STLB')
     caches = util.combine_named(
@@ -211,6 +215,7 @@ def parse_normalized(cores, caches, ptws, pmem, vmem, merged_configs, branch_con
             'branch': util.combine_named(*(c['_branch_predictor_data'] for c in cores), branch_context.find_all()),
             'btb': util.combine_named(*(c['_btb_data'] for c in cores), btb_context.find_all())
             }
+
 
     if compile_all_modules:
         modules_to_compile = [*set(itertools.chain(*(d.keys() for d in module_info.values())))]

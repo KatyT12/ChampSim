@@ -42,6 +42,9 @@ void champsim::plain_printer::print(O3_CPU::stats_type stats)
              std::ceil(stats.total_rob_occupancy_at_branch_mispredict) / total_mispredictions);
 
   std::vector<double> mpkis;
+
+  fmt::print("\nConditional Branch Misprediction rate: {:.3}%\n\n", 100 * (std::ceil(stats.branch_type_misses[BRANCH_CONDITIONAL]) / std::ceil(stats.total_branch_types[BRANCH_CONDITIONAL])));
+
   std::transform(std::begin(stats.branch_type_misses), std::end(stats.branch_type_misses), std::back_inserter(mpkis),
                  [instrs = stats.instrs()](auto x) { return 1000.0 * std::ceil(x) / std::ceil(instrs); });
 

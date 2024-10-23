@@ -21,10 +21,18 @@ all: all_execs
 #  - $(build_objs), the list of all object files corresponding to core sources
 #  - $(module_dirs), the list of all directories that hold module object files
 #  - $(module_objs), the list of all object files corresponding to modules
+#  - gold_standard_testing_predictor_directory If the gold standard testing framework is being used
 #  - All dependencies and flags assigned according to the modules
 include _configuration.mk
 
+ifdef gold_standard_testing_predictor_directory
+all_execs: make_gold_standard $(filter-out $(test_main_name), $(executable_name))
+else
 all_execs: $(filter-out $(test_main_name), $(executable_name))
+endif
+
+make_gold_standard: 	
+	make -C ./branch/gold_standard PREDICTOR=$(gold_standard_testing_predictor_directory); \
 
 # Remove all intermediate files
 clean:

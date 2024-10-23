@@ -1,5 +1,7 @@
 .csconfig/
 _configuration.mk
+branch/gold_standard/Build
+
 
 **/__pycache__/
 *.pyc

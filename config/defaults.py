@@ -114,3 +114,6 @@ def list_defaults(cores, caches):
 
         yield from ({'name': c['name'], 'lower_translate': tlb['name']} for c,tlb in zip(icache_path, itransl_path))
         yield from ({'name': c['name'], 'lower_translate': tlb['name']} for c,tlb in zip(dcache_path, dtransl_path))
+
+def get_gold_standard_file():
+    return "gold_standard"
