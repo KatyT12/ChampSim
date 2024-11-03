@@ -78,7 +78,11 @@ class FileWriter:
 
         self.fileparts.append((os.path.join(inc_dir, instantiation_file_name), instantiation_file.get_instantiation_lines(**elements))) # Instantiation file
         self.fileparts.append((os.path.join(inc_dir, constants_file_name), constants_file.get_constants_file(config_file, elements['pmem']))) # Constants header
-
+        
+        gold_standard = ""
+        if 'gold_standard' in elements['cores'][0]:
+            gold_standard = elements['cores'][0]['gold_standard']
+            
         # Core modules file
         core_declarations, core_definitions = modules.get_ooo_cpu_module_lines(module_info['branch'], module_info['btb'])
 
@@ -97,7 +101,7 @@ class FileWriter:
 
         joined_module_info = util.subdict(util.chain(*module_info.values()), modules_to_compile) # remove module type tag
         self.fileparts.extend((os.path.join(inc_dir, m['name'] + '.inc'), get_map_lines(util.chain(m['func_map'], m.get('deprecated_func_map', {})))) for m in joined_module_info.values())
-        self.fileparts.append((makefile_file_name, makefile.get_makefile_lines(local_objdir_name, build_id, os.path.normpath(os.path.join(local_bindir_name, executable)), local_srcdir_names, joined_module_info, env)))
+        self.fileparts.append((makefile_file_name, makefile.get_makefile_lines(local_objdir_name, build_id, os.path.normpath(os.path.join(local_bindir_name, executable)), local_srcdir_names, joined_module_info, env, gold_standard_testing=gold_standard)))
 
     def finish(self):
         for fname, fcontents in itertools.groupby(sorted(self.fileparts, key=operator.itemgetter(0)), key=operator.itemgetter(0)):

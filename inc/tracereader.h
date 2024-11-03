@@ -22,12 +22,24 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <optional>
+#include <functional>
+#include <unistd.h>
+#include <iostream>
 
 #include "instruction.h"
 #include "util/detect.h"
 
 namespace champsim
 {
+
+  namespace bsv {
+    extern std::optional<int> bsv_pipe_descriptor;
+    extern std::function<void(uint64_t, uint64_t, uint8_t, uint8_t)> send_branch_pred;
+    extern uint64_t* total_prefetched;
+  };
+
+
 class tracereader
 {
   static uint64_t instr_unique_id;
@@ -96,6 +108,7 @@ public:
 };
 
 ooo_model_instr apply_branch_target(ooo_model_instr branch, const ooo_model_instr& target);
+void enable_ahead_predictions(int fd, std::function<void(uint64_t, uint64_t, uint8_t, uint8_t)> f, uint64_t* total_prefetched);
 
 template <typename It>
 void set_branch_targets(It begin, It end)
@@ -106,8 +119,8 @@ void set_branch_targets(It begin, It end)
 
 template <typename T, typename F>
 ooo_model_instr bulk_tracereader<T, F>::operator()()
-{
-  if (std::size(instr_buffer) <= refresh_thresh) {
+{ 
+  if (std::size(instr_buffer) < refresh_thresh) {
     std::array<T, buffer_size - refresh_thresh> trace_read_buf;
     std::array<char, std::size(trace_read_buf) * sizeof(T)> raw_buf;
     std::size_t bytes_read;
@@ -127,8 +140,19 @@ ooo_model_instr bulk_tracereader<T, F>::operator()()
 
     // Set branch targets
     set_branch_targets(std::begin(instr_buffer), std::end(instr_buffer));
-  }
 
+    if(bsv::bsv_pipe_descriptor){
+      //*bsv::total_prefetched = 0;
+      std::for_each(std::begin(instr_buffer), std::end(instr_buffer), [](ooo_model_instr branch) {
+        if(branch.is_branch && branch.branch_type == BRANCH_CONDITIONAL){
+          bsv::send_branch_pred(branch.ip, branch.branch_target, branch.branch_taken, branch.branch_type);
+        }
+      });
+    //std::cout << "Done\n";
+    }
+  }
+  
+  
   auto retval = instr_buffer.front();
   instr_buffer.pop_front();
 

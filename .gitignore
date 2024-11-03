@@ -1,5 +1,9 @@
 .csconfig/
 _configuration.mk
+branch/gold_standard/Build
+branch/gold_standard/Predictors/TourPredictor
+branch/gold_standard/Predictors/Bimodal/Model/Tage.hpp
+
 
 **/__pycache__/
 *.pyc
