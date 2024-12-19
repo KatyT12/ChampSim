@@ -51,7 +51,19 @@ interface TaggedTable#(numeric type tagSize, numeric type indexSize, numeric typ
     */
     
     method Action updateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
-    method Action allocateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool taken);
+    
+    /*
+        Cannot drag entire history? but also dragging index for each table doesn't seem particularly practical
+
+        HOWEVER before on allocation history actually should have recovered so we should use an EHR? but where?
+
+    */
+    method Action allocateEntry(Addr pc, Bool taken);
+
+    /// Debug
+    `ifdef DEBUG
+        method TaggedTableEntry#(tagSize) debugGetEntry(Bit#(indexSize) index);
+    `endif
 endinterface
 
 
@@ -59,6 +71,7 @@ endinterface
 
 module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
+    Add#(a__, tagSize, 64), 
     Add#(indexSize, tagSize, foldedSize));
 
 
@@ -74,17 +87,43 @@ module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
         end
     endfunction
 
+    function Tuple2#(Bit#(tagSize), Bit#(indexSize)) getHistory(Bool recovered, Addr pc);
+        Bit#(TAdd#(tagSize, indexSize)) hist = 0;
+        if(recovered)
+            hist = folded.recoveredHistory;
+        else 
+            hist = folded.history;
+
+        let index = hist[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
+        let tag = hist[valueOf(tagSize)+valueOf(indexSize)-1:valueOf(indexSize)+1] ^ truncate(pc >> 2);
+        return tuple2(tag, index);
+    endfunction
+
+
+
+    // ----------------- DEBUG
+    `ifdef DEBUG
     rule debug;
         $display("Folded: %b\n", folded.history);
     endrule
+    
+    method TaggedTableEntry#(tagSize) debugGetEntry(Bit#(indexSize) index);
+        return tab.sub(index);
+    endmethod
+    `endif
+    
+    
+    
+    // ----------------- DEBUG
+
+
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateHistory(global, taken);
     method ActionValue#(Bit#(foldedSize)) recoverHistory(Bit#(MaxSpecSize) numRecovery) = folded.recoverFrom[numRecovery].undo;
 
+  
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc); // To be used in training
-        let index = folded.history[valueOf(indexSize)-1:0];
-        let tag = folded.history[valueOf(tagSize)+valueOf(indexSize)-1:valueOf(indexSize)+1];
-        return tuple2(tag, index);
+        return getHistory(False, pc);
     endmethod
 
     method TaggedTableEntry#(tagSize) access_entry(Addr pc);
@@ -112,7 +151,11 @@ module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
     endmethod
 
     // 3 bits 100 011
-    method Action allocateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool taken);
+    method Action allocateEntry(Addr pc,  Bool taken);
+        
+        match {.tag, .index} = getHistory(True, pc);
+
+        $display("Tag:%b Index: %b", tag, index);
         // Weakly taken = 100 - 1, weakly not taken = 100 - 1
         Bit#(PredCtrSz) counter_init = 1 << (valueOf(PredCtrSz)-1);
         if (!taken) begin

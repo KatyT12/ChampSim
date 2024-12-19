@@ -45,7 +45,8 @@ module mkHistoryTestBench(Empty);
         
         $display("----------- %d ---------------", count);
         $display("Global history %b\n", gb.history);   
-        $display("Folded history %b\n", fh.history);
+        $display("Folding history %b\n", fh.history);  
+        //$display("Folded history %b\n", fh.history);
         
 
         if(count % 33 == 0) begin
@@ -53,7 +54,13 @@ module mkHistoryTestBench(Empty);
             let recGlobal <-  gb.recoverFrom[1].undo;
             $display("Rec %b\n", recGlobal);   
             dynamicAssert(last_global_2 == recGlobal, "Global failure");
-            dynamicAssert(last_2 == rec, "Failure");
+            
+            $display("%b %b\n", fh.history, fh.recoveredHistory); 
+            
+            // Check EHRs working
+            dynamicAssert(rec == fh.recoveredHistory, "Read not matching recovery");
+            //Check recovery working
+            dynamicAssert(last_2 == rec, "Folding history recovery incorrect");
         end else begin
             last_3 <= last_2;
             last_2 <= last_1;

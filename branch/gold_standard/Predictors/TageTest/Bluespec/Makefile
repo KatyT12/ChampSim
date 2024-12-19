@@ -9,7 +9,7 @@ BSV_INCLUDE = $(TOPDIR)/bsv_include:../../../bsv_include
 SIM_DIR ?= $(BUILD_DIR)/build_bsim
 BUILD_DIR ?= $(TOPDIR)/Build
 
-FILE_NAME ?= Testbench
+FILE_NAME ?= TableTestBench
 TOPFILE   ?= $(TESTBENCH_PATH)/$(FILE_NAME).bsv
 TOPMODULE ?= mk$(FILE_NAME)
 
@@ -22,6 +22,12 @@ BSC_PATHS = -p $(BSV_SRC):$(BSV_INCLUDE):$(PL)
 BSIM_DIRS = -simdir $(SIM_DIR) -bdir $(SIM_DIR) -info-dir $(SIM_DIR)
 BSIM_EXE = $(BUILD_DIR)/$(TOPMODULE)_bsim
 
+ifdef DEBUG
+	DEBUG_MACRO ?= DEBUG
+else
+	DEBUG_MACRO ?= NONE
+endif
+
 all_bsim: full_clean compile  link simulate
 
 
@@ -32,7 +38,7 @@ build_bsim:
 .PHONY: compile
 compile: build_bsim
 	@echo Compiling for Bluesim ...
-	bsc -u -sim $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
+	bsc -u -sim -D $(DEBUG_MACRO) $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
 	@echo Compiling for Bluesim finished
 
 .PHONY: link

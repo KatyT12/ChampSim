@@ -2,7 +2,7 @@ import GlobalBranchHistory::*;
 import BranchParams::*;
 import Vector::*;
 import ConfigReg::*; // Need to use this because of run rule reading the history
-
+import Ehr::*;
 
 
 // Assuming out of order updates, would actually be simpler with in order updates as I could keep a pointer
@@ -21,13 +21,14 @@ Multiple recovery updates to history? hopefully not possible but may need EHRs
 
 interface FoldedHistory#(numeric type length);
     method Bit#(length) history;
+    method Bit#(length) recoveredHistory;
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) newHistory);
     interface Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverFrom;
 endinterface
 
 
 module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
-    Reg#(Bit#(length)) folded_history <- mkConfigReg(0);
+    Ehr#(2, Bit#(length)) folded_history <- mkEhr(0);
     
     // For out of order recovery of branch history
     Reg#(Bit#(MaxSpecSize)) last_spec_outcomes <- mkReg(0);
@@ -39,19 +40,20 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
 
     Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverIfc;
 
+    // Normal update
     (* no_implicit_conditions, fire_when_enabled *)
     rule updateHist(!recover && update);
         if(historyUpdateData.wget matches tagged Valid {.global, .newHistory}) begin
         
-        Bit#(1) new_bit = newHistory ^ folded_history[valueOf(length)-1];
-        Bit#(length) new_folded_history = truncateLSB({folded_history, new_bit} << 1);
+        Bit#(1) new_bit = newHistory ^ folded_history[0][valueOf(length)-1];
+        Bit#(length) new_folded_history = truncateLSB({folded_history[0], new_bit} << 1);
 
         // Eliminate history out of bounds
         Integer i = histLength % valueOf(length);
         Bit#(1) eliminateBit = global[histLength-1];
         new_folded_history[i] = new_folded_history[i] ^ eliminateBit;
         
-        folded_history <= new_folded_history;
+        folded_history[1] <= new_folded_history;
 
         // For recovery updates
         last_spec_outcomes <= truncateLSB({last_spec_outcomes, newHistory} << 1);
@@ -59,13 +61,14 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
         end
     endrule
 
+    // Recovery
     for(Integer i = 0; i < valueOf(MaxSpecSize); i = i+1) begin
         recoverIfc[i] = (interface RecoverMechanism#(length);
             method ActionValue#(Bit#(length)) undo;
                 recover.send;
                 
                 // Restore deleted historu
-                Bit#(length) recovered = folded_history;
+                Bit#(length) recovered = folded_history[0];
                 Integer j = histLength % valueOf(length);
                 for(Integer k = 0; k < i+1; k = k +1) begin                    
                     Bit#(1) eliminateBit = last_removed_history[k];
@@ -75,7 +78,7 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
                 
                 Bit#(length) removed = recovered[i:0] ^ last_spec_outcomes[i:0];
                 recovered =  removed[i:0] << (valueOf(length)-i-1) | truncateLSB(recovered >> (i+1));
-                folded_history <= recovered;
+                folded_history[0] <= recovered;
                 return recovered;
             endmethod
         endinterface);
@@ -83,7 +86,9 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
 
     interface recoverFrom = recoverIfc;
 
-    method Bit#(length) history = folded_history;
+    method Bit#(length) history = folded_history[0];
+
+    method Bit#(length) recoveredHistory = folded_history[1];
 
     // How to know the pointer? Realistically commit stage cannot know
     // If in order then fetch stage will know which branch because we can keep a pointer
@@ -94,6 +99,5 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
         update.send;
         historyUpdateData.wset(tuple2(global.history, newHistory));
     endmethod
-
 endmodule
 //if(lat[j].wget matches tagged Valid .x)

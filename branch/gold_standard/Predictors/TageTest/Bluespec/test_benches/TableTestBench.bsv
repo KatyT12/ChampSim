@@ -4,13 +4,14 @@ import BranchParams::*;
 import LFSR::*;
 import TaggedTable::*;
 import Assert::*;
+import StmtFSM::*;
+import Vector::*;
 
 typedef 10 FoldingSize;
 
 
 (* synthesize *)
 module mkTableTestBench(Empty);
-   
     LFSR#(Bit#(16)) lfsr <- mkLFSR_16;
 
     Reg#(Bool) starting <- mkReg(True);
@@ -18,38 +19,64 @@ module mkTableTestBench(Empty);
 
     GlobalBranchHistory#(GlobalHistoryLength) gb <- mkGlobalBranchHistory;
     TaggedTable#(5, 5, 10) tg <- mkTaggedTable;
- 
 
-    rule start(starting);
-        lfsr.seed(9);
-        starting <= False;
-    endrule
 
-    //(* conflict_free = "gb_updateHistory, run" *)
-    rule run (!starting);
-        //x <= ~x;
-        Bit#(1) value = lfsr.value[0];
-        lfsr.next;
+
+    
         
-        TaggedTableEntry#(5) t = tg.access_entry(13);
-
-        gb.addHistory(value);
-        tg.updateHistory(gb, value);
         
 
-        $display("tag: %d\n", t.predictionCounter);
+    Stmt stmt = seq     
+        lfsr.seed(9); 
+        // Test allocation
+        action
+        $display("Allocation\n");
+            tg.allocateEntry(13,  True);
+        endaction
 
-        if(count == 55) begin
-            $finish(0);
-        end
+        action
+            let t = tg.access_entry(13);
+            $display("%d %d %d\n",t.tag, t.predictionCounter, t.usefulCounter);
+        endaction
 
-        if(count % 5 == 0) begin
-            let r <- tg.recoverHistory(0);
-            $display("Recovered %b\n", r);
-        end
-        count <= count +1;
+        while(count < 10) seq
+            action
+            $display("--  %d  --\n", count);
+                Bit#(1) value = lfsr.value[0];
+                lfsr.next;
 
+                
 
-        
-    endrule
+                gb.addHistory(value);
+                $display("Global history %b\n", gb.history);
+                tg.updateHistory(gb, value);
+
+                let t = tg.access_entry(13);
+                $display("Normal: %d %d %d\n",t.tag, t.predictionCounter, t.usefulCounter);
+                match {.a1, .a2} = tg.trainingInfo(13);
+                $display("Normal tag %d, index %d\n",a1, a2);
+
+                if(count % 20 == 0) begin
+                    tg.updateEntry(3, 3, True, INCREMENT);
+                end
+
+                if(count % 20 == 1) begin
+                    let g <- gb.recoverFrom[0].undo;
+                    let r <- tg.recoverHistory(0);
+                    $display("Recovered %b\n", r);
+                    
+                    tg.allocateEntry(13, False);
+                    let t = tg.access_entry(13);
+                    $display("After recovery %d %d %d\n",t.tag, t.predictionCounter, t.usefulCounter);
+                    
+                end
+                count <= count +1;
+            endaction
+            endseq
+
+    endseq;
+
+    
+
+  mkAutoFSM(stmt);
 endmodule
