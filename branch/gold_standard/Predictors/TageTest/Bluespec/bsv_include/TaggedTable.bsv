@@ -71,7 +71,7 @@ endinterface
 
 module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
-    Add#(a__, tagSize, 64), 
+    Add#(b__, tagSize, 64), 
     Add#(indexSize, tagSize, foldedSize));
 
 

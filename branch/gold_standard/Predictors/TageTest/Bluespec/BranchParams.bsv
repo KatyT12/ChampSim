@@ -1,2 +1,2 @@
-typedef 128 GlobalHistoryLength;
+typedef 160 GlobalHistoryLength;
 typedef 8 MaxSpecSize;
