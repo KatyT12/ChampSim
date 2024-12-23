@@ -15,12 +15,22 @@ typedef 10 FoldingSize;
 
 (* synthesize *)
 module mkTempTestBench(Empty);
-    Tage tage <- mkTage;
+    Tage#(7) tage <- mkTage;
     Reg#(Int#(64)) count  <- mkReg(0);
     
     Stmt stmt = seq     
         count <= count + 1;
-        tage.debugTables(43);
+        //tage.debugTables(43);
+        tage.dirPredInterface.nextPc(13);
+        //action let a <- tage.dirPredInterface.pred[0].pred; endaction
+
+        
+        tage.debugAllocate(13,2);
+        tage.debugAllocate(13,5);
+        tage.debugAllocate(13,6);
+        action 
+        let a <- tage.dirPredInterface.pred[0].pred;
+        endaction
         $display("--%d--\n", count);
     endseq;
 
