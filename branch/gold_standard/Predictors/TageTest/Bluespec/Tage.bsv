@@ -5,6 +5,7 @@ import List::*;
 import HList::*;
 
 import BrPred::*;
+import BranchParams::*;
 import BimodalTable::*;
 import TaggedTable::*;
 import GlobalBranchHistory::*;
@@ -54,7 +55,10 @@ export mkTage;
     end \
     endcase \
 
+// Macro or type definition?
 `define MAX_TAGGED 12
+`define MAX_INDEX_SIZE 10
+`define METAPREDICTOR_CTR_SIZE 4 //ALT_ON_NA
 
 typedef 12 PCIndexSz;
 typedef Bit#(PCIndexSz) PCIndex;
@@ -62,13 +66,24 @@ typedef Bit#(2) Entry;
 
 typedef Tuple2#(Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED))), Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED)))) PredictionTableInfo#(numeric type num);
 
+
 typedef struct {
-    Bool use_bimodal;
-    Bool provider_prediction;
-    Bool taken;
-    Entry counter;
-    PCIndex pc;
-} TageTrainInfo deriving(Bits, Eq, FShow);
+    Bit#(TLog#(numTables)) provider_table;
+    Bit#(`MAX_INDEX_SIZE) index;
+    TaggedTableEntry#(`MAX_TAGGED) provider_entry;
+} ProviderTrainInfo#(numeric type numTables) deriving (FShow, Bits);
+
+typedef struct {
+    Bool use_alt;
+    Bool provider_prediction; // prediction of the provider
+    Bool alt_prediction; // prediction of the alternative table
+    Bool taken; // Outcome
+
+    Maybe#(ProviderTrainInfo#(numTables)) provider_info;
+    Maybe#(Bit#(TLog#(numTables))) alt_table;
+    // Redundancy, can easily be checked with taken and provider but not efficient?
+    Addr pc;
+} TageTrainInfo#(numeric type numTables) deriving(Bits, Eq, FShow);
 
 typedef TageTrainInfo DirPredTrainInfo;
 
@@ -92,10 +107,7 @@ typedef union tagged {
 } TaggedEntrySizes deriving(Bits);
 
 interface Tage#(numeric type numTables);
-    interface DirPredictor#(TageTrainInfo) dirPredInterface;
-    
-    
-    
+    interface DirPredictor#(TageTrainInfo#(numTables)) dirPredInterface;
     `ifdef DEBUG
         method Action debugTables(Addr pc);
         method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
@@ -105,7 +117,9 @@ interface Tage#(numeric type numTables);
 endinterface
 
 
-module mkTage(Tage#(numTables));
+module mkTage(Tage#(numTables)) provisos(
+    Bits#(TageTrainInfo#(numTables), a__)
+);
     TaggedTable#(9,9,5)     t1 <- mkTaggedTable;
     TaggedTable#(9,9,9)     t2 <- mkTaggedTable;
     TaggedTable#(9,10,15)   t3 <- mkTaggedTable;
@@ -114,11 +128,18 @@ module mkTage(Tage#(numTables));
     TaggedTable#(9,11,76)   t6 <- mkTaggedTable;
     TaggedTable#(9,12,130)  t7 <- mkTaggedTable;
 
+    
     BimodalTable#(13, 11) bimodalTable <- mkBimodalTable;
     Vector#(7, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(t1), cons(T_9_9_9(t2), cons(T_9_10_15(t3), cons(T_9_10_25(t4), cons(T_9_11_44(t5), cons(T_9_11_76(t6), cons(T_9_12_130(t7), nil)))))));
     Reg#(Addr) currentPc <- mkRegU;
+    Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
 
-    Vector#(SupSize, DirPred#(TageTrainInfo)) predIfc;
+    Vector#(SupSize, DirPred#(TageTrainInfo#(numTables))) predIfc;
+    GlobalBranchHistory#(GlobalHistoryLength) global <- mkGlobalBranchHistory;
+
+    function Bool useAlt;
+        return unpack(pack(alt_on_na)[`METAPREDICTOR_CTR_SIZE-1]);
+    endfunction
 
     function Tuple2#(Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))), Vector#(numTables,Maybe#(Bit#(TLog#(numTables))))) treeFindPred(Integer len, Integer depth, Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) entries_compare, Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred_compare);
         
@@ -200,16 +221,70 @@ module mkTage(Tage#(numTables));
     for(Integer i=0; i < valueOf(SupSize); i=i+1) begin
         predIfc[i] = (interface DirPred;
         
-        method ActionValue#(DirPredResult#(TageTrainInfo)) pred;
-            DirPredResult#(TageTrainInfo) ret = unpack(0);
+        method ActionValue#(DirPredResult#(TageTrainInfo#(numTables))) pred;
+            TageTrainInfo#(numTables) ret = unpack(0);
             match {.pred, .altpred} = find_pred_altpred;
 
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
-                $display("Found provider %d\n", pred_index);
-            end
-            $display("Pred: ", fshow(pred)," AltPred: ",fshow(altpred));    
+                
+                
+                Bool prediction = takenFromCounter(pred_entry.predictionCounter);
+                ret.provider_prediction = prediction;
 
-            return ret;
+                
+                Bit#(`MAX_INDEX_SIZE) index = 0;
+                // Get the index to avoid recomputing
+                let tab = taggedTablesVector[pred_index];
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc))); /*))
+
+                ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
+
+                if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
+                    ret.alt_table = tagged Valid alt_index;
+                    
+                    Bool alt_prediction = takenFromCounter(alt_entry.predictionCounter);                 
+                    ret.alt_prediction = alt_prediction;
+
+                    if(pred_entry.usefulCounter == 0 && weakCounter(pred_entry.predictionCounter) && useAlt) begin
+                        ret.taken = alt_prediction;
+                        ret.use_alt = True;
+                    end
+                    else begin
+                        ret.use_alt = False;
+                        ret.taken = prediction;
+                    end
+                end
+                else begin
+                    ret.alt_table = tagged Invalid;
+                    Bool bimodal_prediction = unpack(pack(bimodalTable.accessPrediction(currentPc)));
+                    ret.alt_prediction = bimodal_prediction;
+                    ret.use_alt = False;
+                end
+            end
+            else begin
+                ret.alt_table = tagged Invalid;
+                ret.provider_info = tagged Invalid;
+                ret.use_alt = False;
+                // Maybe automatically trigger a read from bimodal table ever time nextPc is set?
+                Bool prediction = unpack(pack(bimodalTable.accessPrediction(currentPc)));
+                ret.provider_prediction = prediction;
+                ret.taken = prediction;
+            end
+
+            // Update history speculatively
+            global.addHistory(pack(ret.taken));
+            for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
+                let tab = taggedTablesVector[i];
+                `CASE_ALL_TABLES(tab, (*/ t.updateHistory(global, pack(ret.taken)); /*))
+            end
+
+            // Update LSFR
+            
+            // Also update histories
+            return DirPredResult {
+                taken: ret.taken,
+                train: ret
+            };
         endmethod
         endinterface);
     end
@@ -241,7 +316,7 @@ module mkTage(Tage#(numTables));
 
     interface  dirPredInterface = interface DirPredictor#(TageTrainInfo);
         interface pred = predIfc;
-        method Action update(Bool taken, TageTrainInfo train, Bool mispred);
+        method Action update(Bool taken, TageTrainInfo#(numTables) train, Bool mispred);
         endmethod
     
         method Action nextPc(Addr pc);

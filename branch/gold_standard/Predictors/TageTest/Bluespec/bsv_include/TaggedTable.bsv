@@ -34,8 +34,18 @@ typedef union tagged {
 } TaggedEntrySizes deriving(Bits);
 
 
+function Bool takenFromCounter(PredCtr ctr);
+    return unpack(pack(ctr)[valueOf(TSub#(PredCtrSz,1))]);
+endfunction
 
-interface TaggedTable#(numeric type tagSize, numeric type indexSize, numeric type historyLength);
+
+// 100
+// 011
+function Bool weakCounter(PredCtr ctr);
+    return (pack(ctr) == (1 << valueOf(TSub#(PredCtrSz,1)))) || (pack(ctr) == ((1 << valueOf(TSub#(PredCtrSz,1)))-1));
+endfunction
+
+interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric type historyLength);
     method TaggedTableEntry#(tagSize) access_entry(Addr pc);
     method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc); // To be used in training
@@ -75,7 +85,7 @@ endinterface
 
 
 
-module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
+module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
     Add#(b__, tagSize, 64), 
     Add#(indexSize, tagSize, foldedSize),
