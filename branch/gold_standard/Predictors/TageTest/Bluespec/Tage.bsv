@@ -1,10 +1,11 @@
-import BrPred::*;
 import RegFile::*;
 import LFSR::*;
 import Vector::*;
 import List::*;
 import HList::*;
 
+import BrPred::*;
+import BimodalTable::*;
 import TaggedTable::*;
 import GlobalBranchHistory::*;
 
@@ -62,6 +63,9 @@ typedef Bit#(2) Entry;
 typedef Tuple2#(Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED))), Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED)))) PredictionTableInfo#(numeric type num);
 
 typedef struct {
+    Bool use_bimodal;
+    Bool provider_prediction;
+    Bool taken;
     Entry counter;
     PCIndex pc;
 } TageTrainInfo deriving(Bits, Eq, FShow);
@@ -110,9 +114,7 @@ module mkTage(Tage#(numTables));
     TaggedTable#(9,11,76)   t6 <- mkTaggedTable;
     TaggedTable#(9,12,130)  t7 <- mkTaggedTable;
 
-    //ChosenTaggedTables a <- T_9_9_5(mkTaggedTable);
-    //Vector#(1, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(mkTaggedTable), nil);
-    //valueOf(numTables)
+    BimodalTable#(13, 11) bimodalTable <- mkBimodalTable;
     Vector#(7, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(t1), cons(T_9_9_9(t2), cons(T_9_10_15(t3), cons(T_9_10_25(t4), cons(T_9_11_44(t5), cons(T_9_11_76(t6), cons(T_9_12_130(t7), nil)))))));
     Reg#(Addr) currentPc <- mkRegU;
 
@@ -183,6 +185,8 @@ module mkTage(Tage#(numTables));
         match{.pred_vec, .altpred_vec} = treeFindPred(len, valueOf(TLog#(numTables)), entries_compare, altpred_compare);
 
         PredictionTableInfo#(numTables) ret = tuple2(tagged Invalid, tagged Invalid);
+        
+        // formout output
         if (pred_vec[0] matches tagged Valid .x)
             if (altpred_vec[0] matches tagged Valid .y)
                 return tuple2(tagged Valid tuple2(x, entries[x]), tagged Valid tuple2(y, entries[y]));
@@ -197,21 +201,15 @@ module mkTage(Tage#(numTables));
         predIfc[i] = (interface DirPred;
         
         method ActionValue#(DirPredResult#(TageTrainInfo)) pred;
-            //match {.pred, .altpred} = find_pred_altpred;
-            
+            DirPredResult#(TageTrainInfo) ret = unpack(0);
             match {.pred, .altpred} = find_pred_altpred;
-            $display("Pred: ", fshow(pred)," AltPred: ",fshow(altpred));
 
-            //$display("%d %d\n", a, b);
+            if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
+                $display("Found provider %d\n", pred_index);
+            end
+            $display("Pred: ", fshow(pred)," AltPred: ",fshow(altpred));    
 
-            // 
-            return DirPredResult {
-                taken: True,
-                train: TageTrainInfo {
-                    counter: 2,
-                    pc: 3
-                }
-            };
+            return ret;
         endmethod
         endinterface);
     end

@@ -2,6 +2,7 @@ import GlobalBranchHistory::*;
 import FoldedHistory::*;
 import BrPred::*;
 import BranchParams::*;
+import Util::*;
 import RegFile::*;
 
 
@@ -85,15 +86,6 @@ module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
     FoldedHistory#(TAdd#(tagSize, indexSize)) folded <- mkFoldedHistory(valueOf(historyLength));
     RegFile#(Bit#(indexSize), TaggedTableEntry#(tagSize)) tab <- mkRegFileWCF(0, maxBound);
 
-    function Bit#(n) boundedUpdate(Bit#(n) counter, Bool increment);
-        if(increment) begin
-            return counter == maxBound ? maxBound : counter + 1;
-        end
-        else begin
-            return counter == 0 ? 0 : counter - 1;
-        end
-    endfunction
-
     function Tuple2#(Bit#(tagSize), Bit#(indexSize)) getHistory(Bool recovered, Addr pc);
         Bit#(TAdd#(tagSize, indexSize)) hist = 0;
         if(recovered)
@@ -110,9 +102,9 @@ module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
 
     // ----------------- DEBUG
     `ifdef DEBUG
-    rule debug(False);
+    /*rule debug(False);
         $display("Folded: %b\n", folded.history);
-    endrule
+    endrule*/
     
     method TaggedTableEntry#(tagSize) debugGetEntry(Bit#(indexSize) index);
         return tab.sub(index);

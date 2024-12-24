@@ -58,8 +58,7 @@ module mkTempTestBench(Empty);
         count <= count + 1;
         //tage.debugTables(43);
         tage.dirPredInterface.nextPc(13);
-        //action let a <- tage.dirPredInterface.pred[0].pred; endaction
-
+        
         allocs <= cons(False, cons(False, cons(True, cons(False, cons(False, cons(True, cons(True, nil)))))));
         pc <= 13;
         expected <= tuple2(6, 5);
@@ -74,13 +73,7 @@ module mkTempTestBench(Empty);
         testPredAltpredFSM.start;
         testPredAltpredFSM.waitTillDone;
       
-        /*tage.debugAllocate(13,2);
-        tage.debugAllocate(13,5);
-        tage.debugAllocate(13,6);
-        action 
-        let a <- tage.dirPredInterface.pred[0].pred;
-        endaction
-        $display("--%d--\n", count);*/
+        action let a <- tage.dirPredInterface.pred[0].pred; endaction
     endseq;
 
   mkAutoFSM(stmt);
