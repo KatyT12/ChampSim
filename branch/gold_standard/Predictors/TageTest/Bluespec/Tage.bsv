@@ -3,6 +3,7 @@ import RegFile::*;
 import LFSR::*;
 import Vector::*;
 import List::*;
+import HList::*;
 
 import TaggedTable::*;
 import GlobalBranchHistory::*;
@@ -52,11 +53,13 @@ export mkTage;
     end \
     endcase \
 
-`define PRINT(x) $display("%d\n",x);
+`define MAX_TAGGED 12
 
 typedef 12 PCIndexSz;
 typedef Bit#(PCIndexSz) PCIndex;
 typedef Bit#(2) Entry;
+
+typedef Tuple2#(Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED))), Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED)))) PredictionTableInfo#(numeric type num);
 
 typedef struct {
     Entry counter;
@@ -77,6 +80,13 @@ typedef union tagged {
     TaggedTable#(9,12, 130) T_9_12_130;
 } ChosenTaggedTables deriving(Bits);
 
+typedef union tagged {
+    TaggedTableEntry#(9) Tag9;
+    TaggedTableEntry#(10) Tag10;
+    TaggedTableEntry#(11) Tag11;
+    TaggedTableEntry#(12) Tag12;
+} TaggedEntrySizes deriving(Bits);
+
 interface Tage#(numeric type numTables);
     interface DirPredictor#(TageTrainInfo) dirPredInterface;
     
@@ -85,7 +95,8 @@ interface Tage#(numeric type numTables);
     `ifdef DEBUG
         method Action debugTables(Addr pc);
         method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
-        method Tuple2#(Maybe#(Bit#(TLog#(numTables))), Maybe#(Bit#(TLog#(numTables)))) debugPredAltpred;
+        method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
+        method PredictionTableInfo#(numTables) debugPredAltpred;
     `endif
 endinterface
 
@@ -107,16 +118,50 @@ module mkTage(Tage#(numTables));
 
     Vector#(SupSize, DirPred#(TageTrainInfo)) predIfc;
 
-    function Tuple2#(Maybe#(Bit#(TLog#(numTables))), Maybe#(Bit#(TLog#(numTables)))) find_pred_altpred;
+    function Tuple2#(Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))), Vector#(numTables,Maybe#(Bit#(TLog#(numTables))))) treeFindPred(Integer len, Integer depth, Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) entries_compare, Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred_compare);
+        
+        if (depth == 0) return tuple2(entries_compare, altpred_compare);
+        else begin
+            Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) pred = replicate(tagged Invalid);
+            Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred = replicate(tagged Invalid);
+
+                // Is this compile time or is it forced to be sequential???
+            for (Integer j = 0; j < 2*(len/2); j = j + 2) begin
+                if (entries_compare[j+1] matches tagged Valid .x) begin
+                    //$display("DEBUG %d %d\n", i, j);
+                    //$display("DEBUG COMPARE ", fshow(entries_compare[j])," ", fshow(entries_compare[j+1]), "\n");
+                    if(altpred_compare[j+1] matches tagged Valid .x)
+                        altpred[j / 2] = altpred_compare[j+1];
+                    else
+                        altpred[j / 2] = entries_compare[j];  
+                    pred[j / 2] = entries_compare[j+1];
+                    
+                end
+                else begin
+                    pred[j / 2] = entries_compare[j];
+                    altpred[j / 2] = altpred_compare[j];
+                end
+            end
+            if (len % 2 == 1) begin
+                //$display("Length %d\n", len);
+                pred[(len/2)] = entries_compare[len-1];
+                altpred[(len/2)] = tagged Invalid;
+            end
+            Integer len2 = (len / 2) + (len % 2);
+        return treeFindPred(len2, depth - 1, pred, altpred);
+        end
+    endfunction
+
+    function PredictionTableInfo#(numTables) find_pred_altpred;
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) entries_compare = replicate(tagged Invalid);
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred_compare = replicate(tagged Invalid);
-        Maybe#(Bit#(TLog#(numTables))) alt_pred = tagged Invalid;
+        
+        Vector#(numTables,TaggedTableEntry#(`MAX_TAGGED)) entries = replicate(TaggedTableEntry{tag:0, predictionCounter:0, usefulCounter:0});
 
         // Will be easiest to cache this, TaggedEntry may have different tag sizes!
         //Vector#(`NUM_TABLES,TaggedTableEntry#(tagSize)) entries <- genVector;
         
         // Retrieve all entries, check if they have a matching tag
-
 
         for(Integer i = 0; i < valueOf(numTables); i=i+1) begin
             ChosenTaggedTables tab = taggedTablesVector[i];    
@@ -124,45 +169,27 @@ module mkTage(Tage#(numTables));
             (*/
                 // Could do this in one
                 match {.tag, .index} = t.trainingInfo(currentPc);
-                let entry = t.access_entry(currentPc);
+                let entry = t.access_wrapped_entry(currentPc);
                 
-                //entries[i] = entry;
-                if (tag == entry.tag) begin
+                entries[i] = entry;
+                if (zeroExtend(tag) == entry.tag) begin
                     entries_compare[i] = tagged Valid fromInteger(i);
                 end
                 /*)
             )
         end
- 
-        Integer len = valueOf(numTables);
-        for (Integer i = 0; i < valueOf(TLog#(numTables)); i = i + 1) begin
 
-            // Is this compile time or is it forced to be sequential???
-            for (Integer j = 0; j < 2*(len/2); j = j + 2) begin
-                if (entries_compare[j+1] matches tagged Valid .x) begin
-                    //$display("DEBUG %d %d\n", i, j);
-                    //$display("DEBUG COMPARE ", fshow(entries_compare[j])," ", fshow(entries_compare[j+1]), "\n");
-                    if(altpred_compare[j+1] matches tagged Valid .x)
-                        altpred_compare[j / 2] = altpred_compare[j+1];
-                    else
-                        altpred_compare[j / 2] = entries_compare[j];  
-                    entries_compare[j / 2] = entries_compare[j+1];
-                    
-                end
-                else begin
-                    entries_compare[j / 2] = entries_compare[j];
-                    altpred_compare[j / 2] = altpred_compare[j];
-                end
-            end
-            if (len % 2 == 1) begin
-                //$display("Length %d\n", len);
-                entries_compare[(len/2)] = entries_compare[len-1];
-                altpred_compare[(len/2)] = tagged Invalid;
-            end
-            len = (len / 2) + (len % 2);
-        end
-        //$display(fshow(entries_compare[0]), fshow(altpred_compare[0]));
-        return tuple2(entries_compare[0], altpred_compare[0]);
+        Integer len = valueOf(numTables);
+        match{.pred_vec, .altpred_vec} = treeFindPred(len, valueOf(TLog#(numTables)), entries_compare, altpred_compare);
+
+        PredictionTableInfo#(numTables) ret = tuple2(tagged Invalid, tagged Invalid);
+        if (pred_vec[0] matches tagged Valid .x)
+            if (altpred_vec[0] matches tagged Valid .y)
+                return tuple2(tagged Valid tuple2(x, entries[x]), tagged Valid tuple2(y, entries[y]));
+            else
+                return tuple2(tagged Valid tuple2(x, entries[x]), tagged Invalid);
+        else
+            return tuple2(tagged Invalid, tagged Invalid);
     endfunction
  
 
@@ -199,13 +226,18 @@ module mkTage(Tage#(numTables));
     endmethod
 
 
-    method Tuple2#(Maybe#(Bit#(TLog#(numTables))), Maybe#(Bit#(TLog#(numTables)))) debugPredAltpred;
+    method PredictionTableInfo#(numTables) debugPredAltpred;
         return find_pred_altpred;
     endmethod
 
     method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         ChosenTaggedTables tab = taggedTablesVector[tableNum];
         `CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, False); /*))
+    endmethod
+
+    method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
+        ChosenTaggedTables tab = taggedTablesVector[tableNum];
+        `CASE_ALL_TABLES(tab, (*/ t.debugUnsetEntry(pc); /*))
     endmethod
     `endif
 

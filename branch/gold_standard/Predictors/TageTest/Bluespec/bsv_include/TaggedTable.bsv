@@ -4,12 +4,8 @@ import BrPred::*;
 import BranchParams::*;
 import RegFile::*;
 
-/*
-typedef struct {
-    Entry counter;
-    Addr pc;
-} TageTrainInfo deriving(Bits, Eq, FShow);
-*/
+
+`define MAX_TAGGED 12
 
 typedef 3 PredCtrSz;
 typedef Bit#(PredCtrSz) PredCtr;
@@ -29,14 +25,22 @@ typedef enum {
     DECREMENT
 } UsefulCtrUpdate deriving (Bits, Eq, FShow);
 
+typedef union tagged {
+    TaggedTableEntry#(9) Tag9;
+    TaggedTableEntry#(10) Tag10;
+    TaggedTableEntry#(11) Tag11;
+    TaggedTableEntry#(12) Tag12;
+} TaggedEntrySizes deriving(Bits);
+
+
+
 interface TaggedTable#(numeric type tagSize, numeric type indexSize, numeric type historyLength);
     method TaggedTableEntry#(tagSize) access_entry(Addr pc);
+    method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc); // To be used in training
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(MaxSpecSize) numRecovery);
-
-
     // For now drag along whole entry that we want to update with
     // Awkwardness with replacing newer updates to that allocation. You might want to actually check the tag still matches
     /*
@@ -62,6 +66,7 @@ interface TaggedTable#(numeric type tagSize, numeric type indexSize, numeric typ
 
     /// Debug
     `ifdef DEBUG
+        method Action debugUnsetEntry(Addr pc);
         method TaggedTableEntry#(tagSize) debugGetEntry(Bit#(indexSize) index);
     `endif
 endinterface
@@ -72,7 +77,9 @@ endinterface
 module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
     Add#(b__, tagSize, 64), 
-    Add#(indexSize, tagSize, foldedSize));
+    Add#(indexSize, tagSize, foldedSize),
+    Add#(c__, tagSize, `MAX_TAGGED));
+    
 
 
     FoldedHistory#(TAdd#(tagSize, indexSize)) folded <- mkFoldedHistory(valueOf(historyLength));
@@ -103,12 +110,17 @@ module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
 
     // ----------------- DEBUG
     `ifdef DEBUG
-    rule debug;
+    rule debug(False);
         $display("Folded: %b\n", folded.history);
     endrule
     
     method TaggedTableEntry#(tagSize) debugGetEntry(Bit#(indexSize) index);
         return tab.sub(index);
+    endmethod
+
+    method Action debugUnsetEntry(Addr pc);
+        match {.tag, .index} = getHistory(True, pc);
+        tab.upd(index, TaggedTableEntry{tag: 0, predictionCounter:0, usefulCounter:0});
     endmethod
     `endif
     
@@ -132,6 +144,13 @@ module mkTaggedTable(TaggedTable#(tagSize, indexSize, historyLength)) provisos(
         return tab.sub(index);
     endmethod
 
+    method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
+        // Shift necessary?
+       Bit#(indexSize) index = folded.history[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
+       TaggedTableEntry#(tagSize) entry = tab.sub(index);
+       TaggedTableEntry#(`MAX_TAGGED) ret = TaggedTableEntry{tag: zeroExtend(entry.tag), predictionCounter: entry.predictionCounter, usefulCounter: entry.usefulCounter};
+       return ret;
+   endmethod
 
     method Action updateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
         let currentEntry = tab.sub(index);
