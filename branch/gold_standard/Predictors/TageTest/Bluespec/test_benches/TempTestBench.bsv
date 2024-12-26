@@ -49,6 +49,17 @@ module mkTempTestBench(Empty);
     endaction
     
   endseq);
+  
+  Stmt testPredictionResult = (seq
+    action
+      let ti <- tage.dirPredInterface.pred[0].pred;
+      $display(ti.taken);
+    endaction
+    
+  endseq);
+  
+  
+  FSM testPredictionResultFSM <- mkFSM(testPredictionResult);
   FSM testPredAltpredFSM <- mkFSM(testPredAltpred);
 
     
@@ -73,7 +84,9 @@ module mkTempTestBench(Empty);
         testPredAltpredFSM.start;
         testPredAltpredFSM.waitTillDone;
       
-        action let a <- tage.dirPredInterface.pred[0].pred; endaction
+        // test predictions
+        testPredictionResultFSM.start;
+        testPredictionResultFSM.waitTillDone;
     endseq;
 
   mkAutoFSM(stmt);

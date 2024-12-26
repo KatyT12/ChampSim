@@ -67,6 +67,9 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
     
     method Action updateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
     
+    // Only done on misprediction
+    method Action decrementUsefulCounter(Addr pc);
+
     /*
         Cannot drag entire history? but also dragging index for each table doesn't seem particularly practical
 
@@ -169,6 +172,15 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
                 tab.upd(index, newEntry);            
             end
         end
+    endmethod
+
+    // Need to use the recovered history
+    method Action decrementUsefulCounter(Addr pc);
+        match {.tag, .index} = getHistory(True, pc);
+        // Idea - seperate the useful counters? or some other way of doing this efficiently
+        TaggedTableEntry#(tagSize) entry = tab.sub(index);
+        entry.usefulCounter = boundedUpdate(entry.usefulCounter, False);
+        tab.upd(index, entry);
     endmethod
 
     // 3 bits 100 011

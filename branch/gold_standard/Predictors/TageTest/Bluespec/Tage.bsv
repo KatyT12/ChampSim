@@ -82,6 +82,8 @@ typedef struct {
     Maybe#(ProviderTrainInfo#(numTables)) provider_info;
     Maybe#(Bit#(TLog#(numTables))) alt_table;
     // Redundancy, can easily be checked with taken and provider but not efficient?
+
+    Bit#(numTables) replaceableEntries;
     Addr pc;
 } TageTrainInfo#(numeric type numTables) deriving(Bits, Eq, FShow);
 
@@ -133,9 +135,23 @@ module mkTage(Tage#(numTables)) provisos(
     Vector#(7, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(t1), cons(T_9_9_9(t2), cons(T_9_10_15(t3), cons(T_9_10_25(t4), cons(T_9_11_44(t5), cons(T_9_11_76(t6), cons(T_9_12_130(t7), nil)))))));
     Reg#(Addr) currentPc <- mkRegU;
     Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
+    
+    // For the LFSR
+    LFSR#(Bit#(4)) lfsr <- mkLFSR_4;
+    Reg#(Bool) starting <- mkReg(True);
 
     Vector#(SupSize, DirPred#(TageTrainInfo#(numTables))) predIfc;
     GlobalBranchHistory#(GlobalHistoryLength) global <- mkGlobalBranchHistory;
+
+    (* no_implicit_conditions, fire_when_enabled*)
+    rule updateLSFR;
+        if(starting) begin
+            lfsr.seed('d9);
+            starting <= False;
+        end
+        else
+            lfsr.next;
+    endrule
 
     function Bool useAlt;
         return unpack(pack(alt_on_na)[`METAPREDICTOR_CTR_SIZE-1]);
@@ -175,16 +191,12 @@ module mkTage(Tage#(numTables)) provisos(
         end
     endfunction
 
-    function PredictionTableInfo#(numTables) find_pred_altpred;
+    function Tuple2#(PredictionTableInfo#(numTables), Bit#(numTables)) find_pred_altpred;
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) entries_compare = replicate(tagged Invalid);
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred_compare = replicate(tagged Invalid);
+        Bit#(numTables) replaceableEntries = 0;
         
         Vector#(numTables,TaggedTableEntry#(`MAX_TAGGED)) entries = replicate(TaggedTableEntry{tag:0, predictionCounter:0, usefulCounter:0});
-
-        // Will be easiest to cache this, TaggedEntry may have different tag sizes!
-        //Vector#(`NUM_TABLES,TaggedTableEntry#(tagSize)) entries <- genVector;
-        
-        // Retrieve all entries, check if they have a matching tag
 
         for(Integer i = 0; i < valueOf(numTables); i=i+1) begin
             ChosenTaggedTables tab = taggedTablesVector[i];    
@@ -193,6 +205,7 @@ module mkTage(Tage#(numTables)) provisos(
                 // Could do this in one
                 match {.tag, .index} = t.trainingInfo(currentPc);
                 let entry = t.access_wrapped_entry(currentPc);
+                replaceableEntries[i] = pack(entry.usefulCounter == 0);
                 
                 entries[i] = entry;
                 if (zeroExtend(tag) == entry.tag) begin
@@ -210,11 +223,11 @@ module mkTage(Tage#(numTables)) provisos(
         // formout output
         if (pred_vec[0] matches tagged Valid .x)
             if (altpred_vec[0] matches tagged Valid .y)
-                return tuple2(tagged Valid tuple2(x, entries[x]), tagged Valid tuple2(y, entries[y]));
+                ret = tuple2(tagged Valid tuple2(x, entries[x]), tagged Valid tuple2(y, entries[y]));
             else
-                return tuple2(tagged Valid tuple2(x, entries[x]), tagged Invalid);
-        else
-            return tuple2(tagged Invalid, tagged Invalid);
+                ret = tuple2(tagged Valid tuple2(x, entries[x]), tagged Invalid);
+        
+        return tuple2(ret, replaceableEntries);
     endfunction
  
 
@@ -223,15 +236,12 @@ module mkTage(Tage#(numTables)) provisos(
         
         method ActionValue#(DirPredResult#(TageTrainInfo#(numTables))) pred;
             TageTrainInfo#(numTables) ret = unpack(0);
-            match {.pred, .altpred} = find_pred_altpred;
+            match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred;
 
+            ret.replaceableEntries = replaceableEntries;
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
-                
-                
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
                 ret.provider_prediction = prediction;
-
-                
                 Bit#(`MAX_INDEX_SIZE) index = 0;
                 // Get the index to avoid recomputing
                 let tab = taggedTablesVector[pred_index];
@@ -259,6 +269,7 @@ module mkTage(Tage#(numTables)) provisos(
                     Bool bimodal_prediction = unpack(pack(bimodalTable.accessPrediction(currentPc)));
                     ret.alt_prediction = bimodal_prediction;
                     ret.use_alt = False;
+                    ret.taken = prediction;
                 end
             end
             else begin
@@ -300,12 +311,12 @@ module mkTage(Tage#(numTables)) provisos(
 
 
     method PredictionTableInfo#(numTables) debugPredAltpred;
-        return find_pred_altpred;
+        return tpl_1(find_pred_altpred);
     endmethod
 
     method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         ChosenTaggedTables tab = taggedTablesVector[tableNum];
-        `CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, False); /*))
+        `CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, True); /*))
     endmethod
 
     method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
@@ -317,6 +328,57 @@ module mkTage(Tage#(numTables)) provisos(
     interface  dirPredInterface = interface DirPredictor#(TageTrainInfo);
         interface pred = predIfc;
         method Action update(Bool taken, TageTrainInfo#(numTables) train, Bool mispred);
+            // Update bimodal table anyway
+            bimodalTable.updateEntry(train.pc, taken);
+
+            Bool mispredict = taken != train.taken;
+            
+            
+            // Allocate on misprediction
+            
+            if (mispredict) begin
+                
+                // Recover histories first
+                //WARNING MUST REMOVE THIS REDUNDANCY
+                let a <- global.recoverFrom[0].undo;
+                for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
+                    let tab = taggedTablesVector[i];
+                    /* WARNING THIS MUST BE CHANGED LATER - NEED A MECHANISM FOR THE NUMBER OF BRANCHES*/
+                    `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(0); /*))
+                end
+
+                if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
+                    $display("Do Nothing\n");
+                end
+                else begin
+                    // Do this on prediction as we access all tables then anyway?
+                    Bit#(TLog#(numTables)) start = 0;
+                    if(train.provider_info matches tagged Valid .inf) begin
+                        // Is this too expensive? Is there a better way to implement the circuit than adding?
+                        start = inf.provider_table+1;
+                    end
+
+                    // Remove all entries before the starting table we are considering
+                    Bit#(numTables) tabs = zeroExtend(train.replaceableEntries << start);
+                    if(tabs == 0) begin
+                        // Decrement all counters as in original TAGE, worried about the circuitry there
+                        for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
+                            if  (fromInteger(i) > start) begin
+                                let tab = taggedTablesVector[i];
+                                `CASE_ALL_TABLES(tab, (*/ t.decrementUsefulCounter(train.pc); /*))
+                            end
+                        end
+                    end
+                    else begin
+                        // Try to allocate.
+
+                        // countOnes
+                        
+                    end
+                end
+                
+            end
+
         endmethod
     
         method Action nextPc(Addr pc);
@@ -327,3 +389,13 @@ module mkTage(Tage#(numTables)) provisos(
         method flush_done = True;
     endinterface;
 endmodule
+
+/*
+Functionality to check
+
+- Bimodal table operations
+- Functions for checking if a counter is taken and for checking if a counter is weak
+- Most of the prediction phase
+
+
+*/

@@ -30,7 +30,7 @@ interface BimodalTable#(numeric type predIndexSize, numeric type hystIndexSize);
     method BimodalInd#(predIndexSize, hystIndexSize) trainingInfo(Addr pc); // To be used in training    
     
     // No need to drag along the indices, as entry will always be the same
-    method Action updateEntry(Addr pc, Bool correct);
+    method Action updateEntry(Addr pc, Bool taken);
     /// Debug
     `ifdef DEBUG
         method BimodalTableEntry debugGetEntry(BimodalInd#(predIndexSize, hystIndexSize) index);
@@ -59,11 +59,11 @@ module mkBimodalTable(BimodalTable#(predIndexSize, hystIndexSize)) provisos(
         return pcToIndex(pc);
     endmethod
 
-    method Action updateEntry(Addr pc, Bool correct);
+    method Action updateEntry(Addr pc, Bool taken);
         // Will need to change this later
         match {.pred_ind, .hyst_ind} = pcToIndex(pc);
         Bit#(2) currentEntry = {pack(predTable.sub(pred_ind)), pack(hystTable.sub(hyst_ind))};
-        currentEntry = boundedUpdate(currentEntry, correct);
+        currentEntry = boundedUpdate(currentEntry, taken);
         
         predTable.upd(pred_ind, unpack(currentEntry[1]));
         hystTable.upd(hyst_ind, unpack(currentEntry[0]));
