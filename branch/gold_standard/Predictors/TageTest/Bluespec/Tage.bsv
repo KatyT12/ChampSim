@@ -63,6 +63,7 @@ export mkTage;
 typedef 12 PCIndexSz;
 typedef Bit#(PCIndexSz) PCIndex;
 typedef Bit#(2) Entry;
+typedef Bit#(TLog#(numTables)) TableIndex#(numeric type numTables);
 
 typedef Tuple2#(Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED))), Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED)))) PredictionTableInfo#(numeric type num);
 
@@ -110,8 +111,10 @@ typedef union tagged {
 
 interface Tage#(numeric type numTables);
     interface DirPredictor#(TageTrainInfo#(numTables)) dirPredInterface;
+    
     `ifdef DEBUG
         method Action debugTables(Addr pc);
+        method Action debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
         method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method PredictionTableInfo#(numTables) debugPredAltpred;
@@ -120,7 +123,8 @@ endinterface
 
 
 module mkTage(Tage#(numTables)) provisos(
-    Bits#(TageTrainInfo#(numTables), a__)
+    Bits#(TageTrainInfo#(numTables), a__),
+    Add#(1, b__, TLog#(TAdd#(1, numTables)))
 );
     TaggedTable#(9,9,5)     t1 <- mkTaggedTable;
     TaggedTable#(9,9,9)     t2 <- mkTaggedTable;
@@ -229,6 +233,70 @@ module mkTage(Tage#(numTables)) provisos(
         
         return tuple2(ret, replaceableEntries);
     endfunction
+
+
+
+    function Action allocate(TageTrainInfo#(numTables) train, Bool taken);
+        action
+        
+        // Recover histories first
+        //WARNING MUST REMOVE THIS REDUNDANCY
+        let a <- global.recoverFrom[0].undo;
+        for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
+            let tab = taggedTablesVector[i];
+            /* WARNING THIS MUST BE CHANGED LATER - NEED A MECHANISM FOR THE NUMBER OF BRANCHES*/
+            `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(0); /*))
+        end
+
+        if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
+            $display("Do Nothing\n");
+        end
+        else begin
+            // Do this on prediction as we access all tables then anyway?
+            Bit#(TLog#(numTables)) start = 0;
+            if(train.provider_info matches tagged Valid .inf) begin
+                // Is this too expensive? Is there a better way to implement the circuit than adding?
+                start = inf.provider_table+1;
+            end
+
+            // Remove all entries before the starting table we are considering
+            Bit#(numTables) tabsReplaceable = zeroExtend(train.replaceableEntries << start);
+            if(tabsReplaceable == 0) begin
+                // Decrement all counters as in original TAGE, worried about the circuitry there
+                for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
+                    if  (fromInteger(i) > start) begin
+                        let tab = taggedTablesVector[i];
+                        `CASE_ALL_TABLES(tab, (*/ t.decrementUsefulCounter(train.pc); /*))
+                    end
+                end
+            end
+            else begin
+                // Try to allocate.
+
+                // overkill?
+                
+                Bit#(TAdd#(TLog#(TAdd#(numTables,1)),1)) num = 1 << countOnes(tabsReplaceable);
+                
+                Bit#(3) randNum = lfsr.value[2:0];
+                Bit#(3) probability = 'd4;
+
+                TableIndex#(numTables) ind;
+                // A better way than sequential?
+                for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
+                    if(unpack(tabsReplaceable[i])) begin
+                        if(num == 'b10 || randNum >= probability)
+                            ind = fromInteger(i);
+                        else begin
+                            probability = probability >> 1;
+                            num = num >> 1;
+                        end
+                    end
+                end
+                `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
+            end
+        end
+    endaction
+    endfunction
  
 
     for(Integer i=0; i < valueOf(SupSize); i=i+1) begin
@@ -236,9 +304,11 @@ module mkTage(Tage#(numTables)) provisos(
         
         method ActionValue#(DirPredResult#(TageTrainInfo#(numTables))) pred;
             TageTrainInfo#(numTables) ret = unpack(0);
+            
+            // Retrieve provider and alternative table
             match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred;
-
             ret.replaceableEntries = replaceableEntries;
+
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
                 ret.provider_prediction = prediction;
@@ -323,6 +393,10 @@ module mkTage(Tage#(numTables)) provisos(
         ChosenTaggedTables tab = taggedTablesVector[tableNum];
         `CASE_ALL_TABLES(tab, (*/ t.debugUnsetEntry(pc); /*))
     endmethod
+
+    method Action debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
+        allocate(train, taken);
+    endmethod
     `endif
 
     interface  dirPredInterface = interface DirPredictor#(TageTrainInfo);
@@ -337,48 +411,8 @@ module mkTage(Tage#(numTables)) provisos(
             // Allocate on misprediction
             
             if (mispredict) begin
-                
-                // Recover histories first
-                //WARNING MUST REMOVE THIS REDUNDANCY
-                let a <- global.recoverFrom[0].undo;
-                for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
-                    let tab = taggedTablesVector[i];
-                    /* WARNING THIS MUST BE CHANGED LATER - NEED A MECHANISM FOR THE NUMBER OF BRANCHES*/
-                    `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(0); /*))
-                end
-
-                if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
-                    $display("Do Nothing\n");
-                end
-                else begin
-                    // Do this on prediction as we access all tables then anyway?
-                    Bit#(TLog#(numTables)) start = 0;
-                    if(train.provider_info matches tagged Valid .inf) begin
-                        // Is this too expensive? Is there a better way to implement the circuit than adding?
-                        start = inf.provider_table+1;
-                    end
-
-                    // Remove all entries before the starting table we are considering
-                    Bit#(numTables) tabs = zeroExtend(train.replaceableEntries << start);
-                    if(tabs == 0) begin
-                        // Decrement all counters as in original TAGE, worried about the circuitry there
-                        for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
-                            if  (fromInteger(i) > start) begin
-                                let tab = taggedTablesVector[i];
-                                `CASE_ALL_TABLES(tab, (*/ t.decrementUsefulCounter(train.pc); /*))
-                            end
-                        end
-                    end
-                    else begin
-                        // Try to allocate.
-
-                        // countOnes
-                        
-                    end
-                end
-                
+                allocate(train, taken);
             end
-
         endmethod
     
         method Action nextPc(Addr pc);

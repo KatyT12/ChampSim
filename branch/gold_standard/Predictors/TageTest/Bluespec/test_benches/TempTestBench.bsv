@@ -57,6 +57,15 @@ module mkTempTestBench(Empty);
     endaction
     
   endseq);
+
+  Stmt testAllocation = (seq
+    action
+      let ti <- tage.dirPredInterface.pred[0].pred;
+      $display(ti.taken);
+    endaction
+    
+  endseq);
+  
   
   
   FSM testPredictionResultFSM <- mkFSM(testPredictionResult);
