@@ -24,6 +24,9 @@ interface FoldedHistory#(numeric type length);
     method Bit#(length) recoveredHistory;
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) newHistory);
     interface Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverFrom;
+    `ifdef DEBUG
+    method Action debugInitialise(Bit#(length) newHistory);
+    `endif
 endinterface
 
 
@@ -34,39 +37,13 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
     Reg#(Bit#(MaxSpecSize)) last_spec_outcomes <- mkReg(0);
     Reg#(Bit#(MaxSpecSize)) last_removed_history <- mkReg(0);
 
-    PulseWire recover <- mkPulseWire;
-    PulseWire update <- mkPulseWire;
-    RWire#(Tuple2#(Bit#(GlobalHistoryLength), Bit#(1))) historyUpdateData <- mkRWire;
-
     Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverIfc;
 
-    // Normal update
-    (* no_implicit_conditions, fire_when_enabled *)
-    rule updateHist(!recover && update);
-        if(historyUpdateData.wget matches tagged Valid {.global, .newHistory}) begin
-        
-        Bit#(1) new_bit = newHistory ^ folded_history[0][valueOf(length)-1];
-        Bit#(length) new_folded_history = truncateLSB({folded_history[0], new_bit} << 1);
-
-        // Eliminate history out of bounds
-        Integer i = histLength % valueOf(length);
-        Bit#(1) eliminateBit = global[histLength-1];
-        new_folded_history[i] = new_folded_history[i] ^ eliminateBit;
-        
-        folded_history[1] <= new_folded_history;
-
-        // For recovery updates
-        last_spec_outcomes <= truncateLSB({last_spec_outcomes, newHistory} << 1);
-        last_removed_history <= truncateLSB({last_removed_history, eliminateBit} << 1);
-        end
-    endrule
 
     // Recovery
     for(Integer i = 0; i < valueOf(MaxSpecSize); i = i+1) begin
         recoverIfc[i] = (interface RecoverMechanism#(length);
-            method ActionValue#(Bit#(length)) undo;
-                recover.send;
-                
+            method ActionValue#(Bit#(length)) undo;        
                 // Restore deleted historu
                 Bit#(length) recovered = folded_history[0];
                 Integer j = histLength % valueOf(length);
@@ -96,8 +73,28 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) newHistory);
         // Shift and add new history bit, with older history
-        update.send;
-        historyUpdateData.wset(tuple2(global.history, newHistory));
+        let folded = folded_history[1];
+        Bit#(1) new_bit = newHistory ^ folded[valueOf(length)-1];
+        Bit#(length) new_folded_history = truncateLSB({folded, new_bit} << 1);
+
+            // Eliminate history out of bounds
+        Integer i = histLength % valueOf(length);
+        Bit#(1) eliminateBit = global.recoveredHistory[histLength-1];
+        new_folded_history[i] = new_folded_history[i] ^ eliminateBit;
+            
+        folded_history[1] <= new_folded_history;
+
+            // For recovery updates
+        last_spec_outcomes <= truncateLSB({last_spec_outcomes, newHistory} << 1);
+        last_removed_history <= truncateLSB({last_removed_history, eliminateBit} << 1);
+        
     endmethod
+
+
+    `ifdef DEBUG
+    method Action debugInitialise(Bit#(length) newHistory);
+        folded_history[0] <= newHistory;
+    endmethod
+    `endif
 endmodule
 //if(lat[j].wget matches tagged Valid .x)
