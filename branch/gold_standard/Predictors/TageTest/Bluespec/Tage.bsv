@@ -9,7 +9,7 @@ import BranchParams::*;
 import BimodalTable::*;
 import TaggedTable::*;
 import GlobalBranchHistory::*;
-
+import Util::*;
 /*
 export DirPredTrainInfo(..);
 export TageTrainInfo(..);
@@ -74,7 +74,7 @@ typedef struct {
     TaggedTableEntry#(`MAX_TAGGED) provider_entry;
 } ProviderTrainInfo#(numeric type numTables) deriving (FShow, Bits);
 
-typedef struct {
+typedef struct{
     Bool use_alt;
     Bool provider_prediction; // prediction of the provider
     Bool alt_prediction; // prediction of the alternative table
@@ -114,7 +114,7 @@ interface Tage#(numeric type numTables);
     
     `ifdef DEBUG
         method Action debugTables(Addr pc);
-        method Action debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
+        method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
         method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method PredictionTableInfo#(numTables) debugPredAltpred;
@@ -124,7 +124,8 @@ endinterface
 
 module mkTage(Tage#(numTables)) provisos(
     Bits#(TageTrainInfo#(numTables), a__),
-    Add#(1, b__, TLog#(TAdd#(1, numTables)))
+    Add#(1, b__, TLog#(TAdd#(1, numTables))),
+    Add#(c__, numTables, 20)
 );
     TaggedTable#(9,9,5)     t1 <- mkTaggedTable;
     TaggedTable#(9,9,9)     t2 <- mkTaggedTable;
@@ -235,9 +236,10 @@ module mkTage(Tage#(numTables)) provisos(
     endfunction
 
 
-
-    function Action allocate(TageTrainInfo#(numTables) train, Bool taken);
-        action
+    // WARNING - REMOVE ACTIONVALUE AFTER DEBUG
+    function ActionValue#(Maybe#(TableIndex#(numTables))) allocate(TageTrainInfo#(numTables) train, Bool taken);
+        actionvalue
+        Maybe#(TableIndex#(numTables)) ret = tagged Invalid;
         
         // Recover histories first
         //WARNING MUST REMOVE THIS REDUNDANCY
@@ -252,15 +254,15 @@ module mkTage(Tage#(numTables)) provisos(
             $display("Do Nothing\n");
         end
         else begin
-            // Do this on prediction as we access all tables then anyway?
+            // Do this on prediction as we access all tables then anyway (?)
             Bit#(TLog#(numTables)) start = 0;
             if(train.provider_info matches tagged Valid .inf) begin
                 // Is this too expensive? Is there a better way to implement the circuit than adding?
-                start = inf.provider_table+1;
+                start = inf.provider_table+1; // Could use a mask for start instead?
             end
 
             // Remove all entries before the starting table we are considering
-            Bit#(numTables) tabsReplaceable = zeroExtend(train.replaceableEntries << start);
+            Bit#(numTables) tabsReplaceable = (train.replaceableEntries >> start) << start;
             if(tabsReplaceable == 0) begin
                 // Decrement all counters as in original TAGE, worried about the circuitry there
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
@@ -271,31 +273,38 @@ module mkTage(Tage#(numTables)) provisos(
                 end
             end
             else begin
-                // Try to allocate.
-
                 // overkill?
-                
                 Bit#(TAdd#(TLog#(TAdd#(numTables,1)),1)) num = 1 << countOnes(tabsReplaceable);
                 
-                Bit#(3) randNum = lfsr.value[2:0];
-                Bit#(3) probability = 'd4;
+                Bit#(3) randNum = {lfsr.value[2:1], lfsr.value[0] | lfsr.value[3]};
+                Bool found = False;
 
-                TableIndex#(numTables) ind;
+                TableIndex#(numTables) ind = 0;
+                
+                `ifdef DEBUG
+                $display(fshow(ind), " Rand:", fshow(randNum),  " Number to choose:", fshow(num), "\n");
+                $display("%b\n",train.replaceableEntries);
+                $display("%b\n",tabsReplaceable);
+                `endif
+
                 // A better way than sequential?
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
                     if(unpack(tabsReplaceable[i])) begin
-                        if(num == 'b10 || randNum >= probability)
+                        if(!found && (num == 'b10 || unpack(randNum[2]))) begin
                             ind = fromInteger(i);
-                        else begin
-                            probability = probability >> 1;
-                            num = num >> 1;
+                            found = True;
                         end
+                        randNum = randNum << 1;
+                        num = num >> 1;
                     end
                 end
                 `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
+                ret = tagged Valid ind;
             end
         end
-    endaction
+        return ret;
+    endactionvalue
+    
     endfunction
  
 
@@ -308,6 +317,7 @@ module mkTage(Tage#(numTables)) provisos(
             // Retrieve provider and alternative table
             match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred;
             ret.replaceableEntries = replaceableEntries;
+
 
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
@@ -394,24 +404,51 @@ module mkTage(Tage#(numTables)) provisos(
         `CASE_ALL_TABLES(tab, (*/ t.debugUnsetEntry(pc); /*))
     endmethod
 
-    method Action debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
-        allocate(train, taken);
+    method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
+        let ind <- allocate(train, taken);
+        return ind;
     endmethod
     `endif
 
     interface  dirPredInterface = interface DirPredictor#(TageTrainInfo);
         interface pred = predIfc;
         method Action update(Bool taken, TageTrainInfo#(numTables) train, Bool mispred);
-            // Update bimodal table anyway
+            // Update bimodal table either way
             bimodalTable.updateEntry(train.pc, taken);
-
             Bool mispredict = taken != train.taken;
             
-            
             // Allocate on misprediction
-            
             if (mispredict) begin
-                allocate(train, taken);
+                let i <- allocate(train, taken);
+            end
+
+            // Tagged tables update
+            if(train.provider_info matches tagged Valid .info) begin
+                let entry = info.provider_entry;
+                // Useful counters
+                UsefulCtrUpdate u = PRESERVE;
+                if(train.provider_prediction == taken && train.alt_prediction != taken)
+                    u = INCREMENT;
+                else if(train.provider_prediction != taken && train.alt_prediction == taken)
+                    u = DECREMENT;
+
+                ChosenTaggedTables providerTable = taggedTablesVector[info.provider_table];
+                `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken == train.provider_prediction, u); /*))
+
+                // ALT_ON_NA
+                if(entry.usefulCounter == 0 && weakCounter(entry.predictionCounter)) begin
+                    if(train.alt_prediction != train.provider_prediction)
+                        alt_on_na <= unpack(boundedUpdate(pack(alt_on_na), train.alt_prediction == taken));
+                end
+            end
+
+            // Update histories.
+            if(mispredict) begin
+                global.updateRecoveredHistory(pack(taken));
+                for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
+                    let tab = taggedTablesVector[i];
+                    `CASE_ALL_TABLES(tab, (*/ t.updateRecovered(global, pack(taken)); /*))
+                end
             end
         endmethod
     

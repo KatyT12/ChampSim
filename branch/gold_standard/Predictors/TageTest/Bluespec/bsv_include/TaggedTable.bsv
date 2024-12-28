@@ -7,6 +7,7 @@ import RegFile::*;
 
 
 `define MAX_TAGGED 12
+`define MAX_INDEX_SIZE 10
 
 typedef 3 PredCtrSz;
 typedef Bit#(PredCtrSz) PredCtr;
@@ -51,9 +52,11 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc); // To be used in training
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
+    method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(MaxSpecSize) numRecovery);
+    
 
-    method Action updateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
+    method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
     
     // Only done on misprediction
     method Action decrementUsefulCounter(Addr pc);
@@ -74,7 +77,8 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
     Add#(b__, tagSize, 64), 
     Add#(indexSize, tagSize, foldedSize),
-    Add#(c__, tagSize, `MAX_TAGGED));
+    Add#(d__, tagSize, `MAX_TAGGED),
+    Add#(c__, indexSize, `MAX_INDEX_SIZE));
     
 
 
@@ -118,6 +122,7 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
 
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateHistory(global, taken);
+    method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateRecoveredHistory(global, taken);
     method ActionValue#(Bit#(foldedSize)) recoverHistory(Bit#(MaxSpecSize) numRecovery) = folded.recoverFrom[numRecovery].undo;
 
   
@@ -139,9 +144,9 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
        return ret;
    endmethod
 
-    method Action updateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
-        let currentEntry = tab.sub(index);
-        if (currentEntry.tag == tag) begin
+    method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
+        let currentEntry = tab.sub(truncate(index));
+        if (currentEntry.tag == truncate(tag)) begin
             TaggedTableEntry#(tagSize) newEntry = currentEntry;   
             // Update prediction and useful counter
             newEntry.predictionCounter = boundedUpdate(currentEntry.predictionCounter, correct);
@@ -151,7 +156,7 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
 
             // Probably completely unnecessary and unhelpful
             if ({newEntry.predictionCounter, newEntry.usefulCounter} != {currentEntry.predictionCounter, currentEntry.usefulCounter}) begin
-                tab.upd(index, newEntry);            
+                tab.upd(truncate(index), newEntry);            
             end
         end
     endmethod
