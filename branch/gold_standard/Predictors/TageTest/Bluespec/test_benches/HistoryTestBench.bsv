@@ -99,20 +99,34 @@ module mkHistoryTestBench(Empty);
         historyToForm <= 10'b1011010111;
         formHistoryFSM.start;
         formHistoryFSM.waitTillDone;
+        $display("Global %b\n", gb.history);
+        $display("Before update Folded %b\n", fh.history);
         action
             Integer rec = 3;
+            Bit#(10) prevState = reverseBits(historyToForm << rec);
+            Bit#(10) newState = {truncateLSB(prevState << 1), 1'b1};
+
             let a <- gb.recoverFrom[rec-1].undo;
             let b <- fh.recoverFrom[rec-1].undo;
-            gb.addHistory(1'b1);
-            fh.updateHistory(gb, 1'b1);
+            gb.updateRecoveredHistory(1'b1);
+            fh.updateRecoveredHistory(gb, 1'b1);
 
             // Read for prediction
-            let a <- fh.history
+            let c = fh.history;
+            dynamicAssert(c == reverseBits(historyToForm), "");
+
+            // Read for index or whatever, after recovery
+            let d = fh.recoveredHistory;
+            dynamicAssert(d == prevState, "");
+
+            //This should not make any difference
+            gb.addHistory(1'b0);
+            fh.updateHistory(gb, 1'b0);
         endaction
 
         //1011010111
         //1010111   
-
+        $display("After update folded %b\n", fh.history);
         action
             Integer rec = 3;
             $display("Global %b\n", gb.history);

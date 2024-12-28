@@ -52,30 +52,12 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(MaxSpecSize) numRecovery);
-    // For now drag along whole entry that we want to update with
-    // Awkwardness with replacing newer updates to that allocation. You might want to actually check the tag still matches
-    /*
-        Decision - drag along original entry, meaning updates in between can be replaced.
-        
-        Because of register ports, for now I will update by actually reading the entry and choosing incrementing/decrementing rather than
-        just replacing the entry or doing any sort of read of the counters.
 
-        There is also the issue of replacing data as mentioned above
-
-        method Action update_entry(Bit#(indexSize) index, TaggedTableEntry newEntry);
-    */
-    
     method Action updateEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
     
     // Only done on misprediction
     method Action decrementUsefulCounter(Addr pc);
 
-    /*
-        Cannot drag entire history? but also dragging index for each table doesn't seem particularly practical
-
-        HOWEVER before on allocation history actually should have recovered so we should use an EHR? but where?
-
-    */
     method Action allocateEntry(Addr pc, Bool taken);
 
     /// Debug
@@ -174,10 +156,10 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
         end
     endmethod
 
-    // Need to use the recovered history
+    
     method Action decrementUsefulCounter(Addr pc);
-        match {.tag, .index} = getHistory(True, pc);
-        // Idea - seperate the useful counters? or some other way of doing this efficiently
+        match {.tag, .index} = getHistory(True, pc); // Need to use the recovered history!
+        // Idea - seperate the useful counters? or some other way of doing this without a read. Could instead drag useful counters.
         TaggedTableEntry#(tagSize) entry = tab.sub(index);
         entry.usefulCounter = boundedUpdate(entry.usefulCounter, False);
         tab.upd(index, entry);

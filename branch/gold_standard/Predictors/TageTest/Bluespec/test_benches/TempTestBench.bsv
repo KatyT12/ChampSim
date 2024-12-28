@@ -4,8 +4,9 @@ import BrPred::*;
 import BranchParams::*;
 import TaggedTable::*;
 import Tage::*;
-import Assert::*;
+import Util::*;
 
+import Assert::*;
 import LFSR::*;
 import Assert::*;
 import StmtFSM::*;
@@ -25,6 +26,14 @@ module mkTempTestBench(Empty);
   Reg#(Addr) pc <- mkRegU;
   
   Reg#(UInt#(3)) i <- mkRegU;
+
+
+  /// For allocation testing
+  Reg#(Bit#(`NUM_TABLES)) replaceAble <- mkRegU;
+  Reg#(Bit#(`NUM_TABLES)) expectedIn <- mkRegU;
+  Reg#(Bit#(3)) startFrom <- mkRegU;
+  Reg#(Bool) useBimodal <- mkReg(False);
+  
     
   Stmt testPredAltpred = (seq
     for(i <= 0; i < `NUM_TABLES; i <= i+1) action 
@@ -60,9 +69,24 @@ module mkTempTestBench(Empty);
 
   Stmt testAllocation = (seq
     action
-      let ti <- tage.dirPredInterface.pred[0].pred;
-      $display(ti.taken);
+      TageTrainInfo#(`NUM_TABLES) tst = unpack(0);
+      if(!useBimodal)
+        tst.provider_info = tagged Valid ProviderTrainInfo{provider_table: startFrom, index: 5, provider_entry: TaggedTableEntry{tag: 1, predictionCounter:0, usefulCounter:0}};
+      else
+        tst.provider_info = tagged Invalid;
+      tst.pc = 13;
+      tst.replaceableEntries = truncate(reverseBits(replaceAble));
+      let result <- tage.debugMispredictAllocation(tst, False);
+      
+      $display("INDEX CHOSEN from %d ",startFrom, fshow(result), "\n");
+      $display("%b, %b\n",reverseBits(expectedIn), expectedIn);
+      if (result matches tagged Valid .i)
+        dynamicAssert(unpack(reverseBits(expectedIn)[i]), "testAllocation: Invalid index chosen");
+      else
+        dynamicAssert(reverseBits(expectedIn) == 0, "testAllocation: Missing index for valid allocation");
+      
     endaction
+    useBimodal <= False;
     
   endseq);
   
@@ -70,13 +94,30 @@ module mkTempTestBench(Empty);
   
   FSM testPredictionResultFSM <- mkFSM(testPredictionResult);
   FSM testPredAltpredFSM <- mkFSM(testPredAltpred);
+  FSM testAllocationFSM <- mkFSM(testAllocation);
 
-    
-    Reg#(Int#(64)) count  <- mkReg(0);
-    
-    Stmt stmt = seq     
-        count <= count + 1;
-        //tage.debugTables(43);
+
+    Stmt stmt = seq
+        // -------------- Exhaustively Test utility functions
+        dynamicAssert(boundedUpdate(2'b11, True) == 2'b11,"");
+        dynamicAssert(boundedUpdate(2'b00, False) == 2'b00, "");
+        dynamicAssert(boundedUpdate(2'b00, False) == 2'b00, "");
+        
+        dynamicAssert(weakCounter(3'b100), "");
+        dynamicAssert(weakCounter(3'b011), "");
+        dynamicAssert(!weakCounter(3'b101), "");
+        dynamicAssert(!weakCounter(3'b111), "");
+        dynamicAssert(!weakCounter(3'b001), "");
+        dynamicAssert(!weakCounter(3'b000), "");
+
+        dynamicAssert(takenFromCounter(3'b100), "");
+        dynamicAssert(takenFromCounter(3'b101), "");
+        dynamicAssert(takenFromCounter(3'b111), "");
+        dynamicAssert(!takenFromCounter(3'b001), "");
+        dynamicAssert(!takenFromCounter(3'b011), "");
+        dynamicAssert(!takenFromCounter(3'b000), "");
+        // ------------------
+
         tage.dirPredInterface.nextPc(13);
         
         allocs <= cons(False, cons(False, cons(True, cons(False, cons(False, cons(True, cons(True, nil)))))));
@@ -96,6 +137,58 @@ module mkTempTestBench(Empty);
         // test predictions
         testPredictionResultFSM.start;
         testPredictionResultFSM.waitTillDone;
+
+
+        // Test allocations
+
+        // 4 or 5
+        replaceAble <= 7'b1000110;
+        startFrom <= 2;
+        expectedIn <= 7'b0000110;
+
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+
+        // 2 or 3
+        replaceAble <= 7'b1110100;
+        startFrom <= 2;
+        expectedIn <= 7'b0000100;
+
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+
+        replaceAble <= 7'b1110000;
+        startFrom <= 2;
+        expectedIn <= 7'b0000000;
+
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+
+        replaceAble <= 7'b1111111;
+        startFrom <= 2;
+        expectedIn <= 7'b0001110;
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+  
+
+        replaceAble <= 7'b1111111;
+        expectedIn <= 7'b1110000;
+        useBimodal <= True;
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+
+        replaceAble <= 7'b1111111;
+        startFrom <= 6;
+        expectedIn <= 7'b0000000;
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+
+        replaceAble <= 7'b0101101;
+        startFrom <= 0;
+        expectedIn <= 7'b0101100;
+        testAllocationFSM.start;
+        testAllocationFSM.waitTillDone;
+        
     endseq;
 
   mkAutoFSM(stmt);
