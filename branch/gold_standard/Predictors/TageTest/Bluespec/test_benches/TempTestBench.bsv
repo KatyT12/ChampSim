@@ -11,6 +11,7 @@ import LFSR::*;
 import Assert::*;
 import StmtFSM::*;
 import Vector::*;
+import RegFile::*;
 
 typedef 10 FoldingSize;
 
@@ -24,7 +25,7 @@ module mkTempTestBench(Empty);
   Reg#(Vector#(`NUM_TABLES, Bool)) allocs <- mkReg(replicate(False));
   Reg#(Tuple2#(Bit#(3), Bit#(3))) expected <- mkReg(tuple2(0,0));
   Reg#(Addr) pc <- mkRegU;
-  
+
   Reg#(UInt#(3)) i <- mkRegU;
 
 
@@ -42,7 +43,7 @@ module mkTempTestBench(Empty);
         end
         else
           tage.debugResetEntry(pc,pack(i));
-
+          $display("RESET %d\n", i);
     endaction 
     
     action
@@ -78,8 +79,8 @@ module mkTempTestBench(Empty);
       tst.replaceableEntries = truncate(reverseBits(replaceAble));
       let result <- tage.debugMispredictAllocation(tst, False);
       
-      $display("INDEX CHOSEN from %d ",startFrom, fshow(result), "\n");
-      $display("%b, %b\n",reverseBits(expectedIn), expectedIn);
+      let start = useBimodal ? 0 : startFrom;
+      $display("INDEX CHOSEN from %d ",start, fshow(result), "\n");
       if (result matches tagged Valid .i)
         dynamicAssert(unpack(reverseBits(expectedIn)[i]), "testAllocation: Invalid index chosen");
       else
@@ -118,10 +119,21 @@ module mkTempTestBench(Empty);
         dynamicAssert(!takenFromCounter(3'b000), "");
         // ------------------
 
-        tage.dirPredInterface.nextPc(13);
+        // Check that entries are initialised to 0
+        
+        
+          
+        // TODO: Add randomness here, or exhaustively check
+        action
+          let entry = tage.debugGetEntry(1293, 4); 
+          $display(fshow(entry));
+          dynamicAssert((entry.predictionCounter == 4 && entry.usefulCounter == 0 && entry.tag == 0), "Tagged tables need to be initialised to 0, prediction counter initialised to weakly taken (4)");
+        endaction
+
+        tage.dirPredInterface.nextPc(4010103);
         
         allocs <= cons(False, cons(False, cons(True, cons(False, cons(False, cons(True, cons(True, nil)))))));
-        pc <= 13;
+        pc <= 4010103;
         expected <= tuple2(6, 5);
         
         testPredAltpredFSM.start;
@@ -129,10 +141,12 @@ module mkTempTestBench(Empty);
 
         // (4, 1)
         allocs <= cons(False, cons(True, cons(False, cons(False, cons(True, cons(False, cons(False, nil)))))));
-        pc <= 13;
+        pc <= 4010103;
         expected <= tuple2(4, 1);
         testPredAltpredFSM.start;
         testPredAltpredFSM.waitTillDone;
+
+        tage.dirPredInterface.nextPc(13);
       
         // test predictions
         testPredictionResultFSM.start;

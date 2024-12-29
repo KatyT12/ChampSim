@@ -117,6 +117,7 @@ interface Tage#(numeric type numTables);
         method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
         method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
+        method TaggedTableEntry#(`MAX_TAGGED) debugGetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method PredictionTableInfo#(numTables) debugPredAltpred;
     `endif
 endinterface
@@ -154,8 +155,10 @@ module mkTage(Tage#(numTables)) provisos(
             lfsr.seed('d9);
             starting <= False;
         end
+        `ifdef OFF_GOLD_STANDARD
         else
             lfsr.next;
+        `endif
     endrule
 
     function Bool useAlt;
@@ -208,7 +211,7 @@ module mkTage(Tage#(numTables)) provisos(
             `CASE_ALL_TABLES(tab, 
             (*/
                 // Could do this in one
-                match {.tag, .index} = t.trainingInfo(currentPc);
+                match {.tag, .index} = t.trainingInfo(currentPc, False);
                 let entry = t.access_wrapped_entry(currentPc);
                 replaceableEntries[i] = pack(entry.usefulCounter == 0);
                 
@@ -219,7 +222,7 @@ module mkTage(Tage#(numTables)) provisos(
                 /*)
             )
         end
-
+        
         Integer len = valueOf(numTables);
         match{.pred_vec, .altpred_vec} = treeFindPred(len, valueOf(TLog#(numTables)), entries_compare, altpred_compare);
 
@@ -274,7 +277,7 @@ module mkTage(Tage#(numTables)) provisos(
             end
             else begin
                 // overkill?
-                Bit#(TAdd#(TLog#(TAdd#(numTables,1)),1)) num = 1 << countOnes(tabsReplaceable);
+                Bit#(TAdd#(numTables,1)) num = 1 << countOnes(tabsReplaceable);
                 
                 Bit#(3) randNum = {lfsr.value[2:1], lfsr.value[0] | lfsr.value[3]};
                 Bool found = False;
@@ -282,12 +285,13 @@ module mkTage(Tage#(numTables)) provisos(
                 TableIndex#(numTables) ind = 0;
                 
                 `ifdef DEBUG
-                $display(fshow(ind), " Rand:", fshow(randNum),  " Number to choose:", fshow(num), "\n");
+                $display(fshow(start), " Rand:", fshow(randNum),  " Number to choose:", fshow(num), "\n");
                 $display("%b\n",train.replaceableEntries);
                 $display("%b\n",tabsReplaceable);
                 `endif
 
                 // A better way than sequential?
+                
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
                     if(unpack(tabsReplaceable[i])) begin
                         if(!found && (num == 'b10 || unpack(randNum[2]))) begin
@@ -298,8 +302,15 @@ module mkTage(Tage#(numTables)) provisos(
                         num = num >> 1;
                     end
                 end
+
                 `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
                 ret = tagged Valid ind;
+
+
+                /* REMOVE LATER */
+                Bit#(20) index = 0;
+                `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, True))); /*))
+                $display(2,"BLUESPEC ALLOCATE FOR %d %d %d\n",currentPc, ind, index);
             end
         end
         return ret;
@@ -312,12 +323,15 @@ module mkTage(Tage#(numTables)) provisos(
         predIfc[i] = (interface DirPred;
         
         method ActionValue#(DirPredResult#(TageTrainInfo#(numTables))) pred;
+            $display("BLUESPEC PREDICT %d", currentPc);
+            $display("BLUESPEC LFSR %d\n", lfsr.value);
+            $display("BLUESPEC ALT_ON_NA %d\n", alt_on_na);
             TageTrainInfo#(numTables) ret = unpack(0);
             
             // Retrieve provider and alternative table
             match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred;
             ret.replaceableEntries = replaceableEntries;
-
+            ret.pc = currentPc;
 
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
@@ -325,8 +339,9 @@ module mkTage(Tage#(numTables)) provisos(
                 Bit#(`MAX_INDEX_SIZE) index = 0;
                 // Get the index to avoid recomputing
                 let tab = taggedTablesVector[pred_index];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc))); /*))
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); /*))
 
+                $display("BLUESPEC TABLE INDEX %d %d\n",pred_index, index);
                 ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
 
                 if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
@@ -353,6 +368,8 @@ module mkTage(Tage#(numTables)) provisos(
                 end
             end
             else begin
+                //$display("BLUESPEC BIMODAL INDICES %d\n", currentPc);
+                //$display(fshow(bimodalTable.trainingInfo(currentPc)));
                 ret.alt_table = tagged Invalid;
                 ret.provider_info = tagged Invalid;
                 ret.use_alt = False;
@@ -369,8 +386,7 @@ module mkTage(Tage#(numTables)) provisos(
                 `CASE_ALL_TABLES(tab, (*/ t.updateHistory(global, pack(ret.taken)); /*))
             end
 
-            // Update LSFR
-            
+           
             // Also update histories
             return DirPredResult {
                 taken: ret.taken,
@@ -380,12 +396,11 @@ module mkTage(Tage#(numTables)) provisos(
         endinterface);
     end
 
-   
     `ifdef DEBUG
     method Action debugTables(Addr pc);
         for(Integer i = 0; i < 7; i=i+1) begin
             ChosenTaggedTables tab = taggedTablesVector[i];
-            `CASE_ALL_TABLES(tab, (*/match {.c, .d} = t.trainingInfo(pc); $display("%d %d\n", c, d);/*))    
+            `CASE_ALL_TABLES(tab, (*/match {.c, .d} = t.trainingInfo(pc, False); $display("%d %d\n", c, d);/*))    
         end
     endmethod
 
@@ -407,6 +422,11 @@ module mkTage(Tage#(numTables)) provisos(
     method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
         let ind <- allocate(train, taken);
         return ind;
+    endmethod
+
+    method TaggedTableEntry#(`MAX_TAGGED) debugGetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
+        ChosenTaggedTables tab = taggedTablesVector[tableNum];
+        `CASE_ALL_TABLES(tab, (*/ return t.access_wrapped_entry(pc); /*))
     endmethod
     `endif
 
@@ -433,9 +453,23 @@ module mkTage(Tage#(numTables)) provisos(
                     u = DECREMENT;
 
                 ChosenTaggedTables providerTable = taggedTablesVector[info.provider_table];
-                `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken == train.provider_prediction, u); /*))
+                `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken, u); /*))
 
                 // ALT_ON_NA
+                
+                /* Remove later */
+
+                if(train.alt_table matches tagged Valid .alt_t) begin
+                    $display("BLUESPEC UPDATE ALT PRED TABLE %d\n", alt_t);
+                end
+                else
+                    $display("BLUESPEC UPDATE ALT PRED BIMODAL\n");
+                $display("BLUESPEC UPDATE ALT PRED TAKEN %d\n", train.alt_prediction);
+                $display("BLUESPEC PROVIDR ENTRY COUNTER %d\n", entry.predictionCounter);
+                $display("BLUESPEC PROVIDR ENTRY USEFUL %d\n", entry.usefulCounter);
+
+                /* Remove later */
+                
                 if(entry.usefulCounter == 0 && weakCounter(entry.predictionCounter)) begin
                     if(train.alt_prediction != train.provider_prediction)
                         alt_on_na <= unpack(boundedUpdate(pack(alt_on_na), train.alt_prediction == taken));
@@ -450,6 +484,11 @@ module mkTage(Tage#(numTables)) provisos(
                     `CASE_ALL_TABLES(tab, (*/ t.updateRecovered(global, pack(taken)); /*))
                 end
             end
+
+            // Update LSFR
+            `ifndef OFF_GOLD_STANDARD
+             lfsr.next;
+            `endif
         endmethod
     
         method Action nextPc(Addr pc);

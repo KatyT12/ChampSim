@@ -1,4 +1,4 @@
-#define DEBUG_DATA
+#define NONE
 #include<stdio.h>
 #include<instruction.h>
 #include<bitset>

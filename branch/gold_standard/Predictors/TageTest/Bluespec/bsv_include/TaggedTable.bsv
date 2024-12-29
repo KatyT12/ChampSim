@@ -19,7 +19,7 @@ typedef struct {
     PredCtr predictionCounter;
     UsefulCtr usefulCounter;
     Bit#(tagSize) tag;
-} TaggedTableEntry#(numeric type tagSize) deriving(Bits, Eq, FShow);
+} TaggedTableEntry#(numeric type tagSize) deriving(Eq, FShow);
 
 typedef enum {
     INCREMENT,
@@ -27,13 +27,20 @@ typedef enum {
     DECREMENT
 } UsefulCtrUpdate deriving (Bits, Eq, FShow);
 
-typedef union tagged {
-    TaggedTableEntry#(9) Tag9;
-    TaggedTableEntry#(10) Tag10;
-    TaggedTableEntry#(11) Tag11;
-    TaggedTableEntry#(12) Tag12;
-} TaggedEntrySizes deriving(Bits);
+instance Bits#(TaggedTableEntry#(tagSize), TAdd#(tagSize, TAdd#(PredCtrSz, UsefulCtrSz)));   
+    function Bit#(TAdd#(tagSize, TAdd#(PredCtrSz, UsefulCtrSz))) pack(TaggedTableEntry#(tagSize) s);
+        return {pack(s.tag), pack(s.usefulCounter), pack(s.predictionCounter)};
+    endfunction
 
+    
+    function TaggedTableEntry#(tagSize) unpack(Bit#(TAdd#(tagSize, TAdd#(PredCtrSz, UsefulCtrSz))) b);
+        let predCounter = unpack(b[valueOf(PredCtrSz)-1:0]);
+        let usefulCounter = unpack(b[valueOf(TAdd#(UsefulCtrSz, PredCtrSz))-1:valueOf(PredCtrSz)]);
+        let tag = unpack(b[valueOf(TAdd#(tagSize,TAdd#(UsefulCtrSz, PredCtrSz)))-1:valueOf(TAdd#(UsefulCtrSz, PredCtrSz))]);
+        
+        return TaggedTableEntry{ tag: tag, predictionCounter: predCounter, usefulCounter: usefulCounter };
+    endfunction
+endinstance
 
 function Bool takenFromCounter(PredCtr ctr);
     return unpack(pack(ctr)[valueOf(TSub#(PredCtrSz,1))]);
@@ -49,14 +56,14 @@ endfunction
 interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric type historyLength);
     method TaggedTableEntry#(tagSize) access_entry(Addr pc);
     method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
-    method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc); // To be used in training
+    method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc, Bool recovered); // To be used in training
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(MaxSpecSize) numRecovery);
     
 
-    method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
+    method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool taken, UsefulCtrUpdate usefulUpdate);
     
     // Only done on misprediction
     method Action decrementUsefulCounter(Addr pc);
@@ -77,13 +84,12 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
     Add#(b__, tagSize, 64), 
     Add#(indexSize, tagSize, foldedSize),
+    Add#(f__, TAdd#(tagSize, indexSize), 64),
     Add#(d__, tagSize, `MAX_TAGGED),
     Add#(c__, indexSize, `MAX_INDEX_SIZE));
     
-
-
     FoldedHistory#(TAdd#(tagSize, indexSize)) folded <- mkFoldedHistory(valueOf(historyLength));
-    RegFile#(Bit#(indexSize), TaggedTableEntry#(tagSize)) tab <- mkRegFileWCF(0, maxBound);
+    RegFile#(Bit#(indexSize), TaggedTableEntry#(tagSize)) tab <- mkRegFileWCFLoad(regInitTaggedTableFilename, 0, maxBound);
 
     function Tuple2#(Bit#(tagSize), Bit#(indexSize)) getHistory(Bool recovered, Addr pc);
         Bit#(TAdd#(tagSize, indexSize)) hist = 0;
@@ -92,12 +98,12 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
         else 
             hist = folded.history;
 
-        let index = hist[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
-        let tag = hist[valueOf(tagSize)+valueOf(indexSize)-1:valueOf(indexSize)+1] ^ truncate(pc >> 2);
+        let combined = (pack(pc) ^ (pack(pc) >> 2) ^ (pack(pc) >> 5)) ^ zeroExtend(hist);
+        
+        let index = combined[valueOf(indexSize)-1:0];
+        let tag = combined[valueOf(tagSize)+valueOf(indexSize)-1:valueOf(indexSize)];
         return tuple2(tag, index);
     endfunction
-
-
 
     // ----------------- DEBUG
     `ifdef DEBUG
@@ -126,30 +132,31 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
     method ActionValue#(Bit#(foldedSize)) recoverHistory(Bit#(MaxSpecSize) numRecovery) = folded.recoverFrom[numRecovery].undo;
 
   
-    method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc); // To be used in training
-        return getHistory(False, pc);
+    method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc, Bool recovered); // To be used in training
+        return getHistory(recovered, pc);
     endmethod
 
     method TaggedTableEntry#(tagSize) access_entry(Addr pc);
          // Shift necessary?
-        Bit#(indexSize) index = folded.history[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
+        //folded.history[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
+        Bit#(indexSize) index = tpl_2(getHistory(False, pc));
         return tab.sub(index);
     endmethod
 
     method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
         // Shift necessary?
-       Bit#(indexSize) index = folded.history[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
+       Bit#(indexSize) index = tpl_2(getHistory(False, pc));
        TaggedTableEntry#(tagSize) entry = tab.sub(index);
        TaggedTableEntry#(`MAX_TAGGED) ret = TaggedTableEntry{tag: zeroExtend(entry.tag), predictionCounter: entry.predictionCounter, usefulCounter: entry.usefulCounter};
        return ret;
    endmethod
 
-    method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool correct, UsefulCtrUpdate usefulUpdate);
+    method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool taken, UsefulCtrUpdate usefulUpdate);
         let currentEntry = tab.sub(truncate(index));
         if (currentEntry.tag == truncate(tag)) begin
             TaggedTableEntry#(tagSize) newEntry = currentEntry;   
             // Update prediction and useful counter
-            newEntry.predictionCounter = boundedUpdate(currentEntry.predictionCounter, correct);
+            newEntry.predictionCounter = boundedUpdate(currentEntry.predictionCounter, taken);
             if (usefulUpdate != PRESERVE) begin
                 newEntry.usefulCounter = boundedUpdate(currentEntry.usefulCounter, usefulUpdate == INCREMENT);
             end

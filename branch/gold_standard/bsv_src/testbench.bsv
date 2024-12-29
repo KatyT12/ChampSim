@@ -27,7 +27,7 @@ typedef union tagged{
 (* synthesize *)
 module mkTestbench(Empty);
     
-
+    Reg#(UInt#(64)) count <- mkReg(0);
     Reg#(Bit#(8)) prediction <- mkReg(0);
     Reg#(Message) message <- mkReg(?);
     Reg#(Bool) debug <- mkReg(?);
@@ -112,6 +112,8 @@ module mkTestbench(Empty);
               endseq
               if (!isPred(message)) seq
                 update(message.UpdateReq);
+                count <= count + 1;
+                $display("BLUESPEC PRED COUNT %d\n", count); // REMOVE LATER
                 if(debug) debugUpdate(message.UpdateReq);
               endseq
             endseq
