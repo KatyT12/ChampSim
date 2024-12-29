@@ -267,10 +267,21 @@ module mkTage(Tage#(numTables)) provisos(
             // Remove all entries before the starting table we are considering
             Bit#(numTables) tabsReplaceable = (train.replaceableEntries >> start) << start;
             if(tabsReplaceable == 0) begin
+                $display("BLUESPEC All useful counters are zero\n");
                 // Decrement all counters as in original TAGE, worried about the circuitry there
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
-                    if  (fromInteger(i) > start) begin
+                    if  (fromInteger(i) >= start) begin
                         let tab = taggedTablesVector[i];
+
+                        /* REMOVE THIS*/
+                        Bit#(20) index;
+                        `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, True))); /*))
+                        if(index == 154) begin
+                            $display("BLUESPEC decrement %d %d\n", i, 154);
+                        end
+                        /* REMOVE THIS*/
+
+
                         `CASE_ALL_TABLES(tab, (*/ t.decrementUsefulCounter(train.pc); /*))
                     end
                 end
@@ -309,8 +320,11 @@ module mkTage(Tage#(numTables)) provisos(
 
                 /* REMOVE LATER */
                 Bit#(20) index = 0;
-                `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, True))); /*))
-                $display(2,"BLUESPEC ALLOCATE FOR %d %d %d\n",currentPc, ind, index);
+                Bit#(`MAX_TAGGED) tag = 0;
+                
+                let tab = taggedTablesVector[ind];
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, True))); tag = zeroExtend(tpl_1(t.trainingInfo(train.pc, True))); /*))
+                $display(2,"BLUESPEC ALLOCATE FOR %d %d %d %d\n",currentPc, ind, index, tag);
             end
         end
         return ret;
@@ -336,14 +350,16 @@ module mkTage(Tage#(numTables)) provisos(
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
                 ret.provider_prediction = prediction;
+                
+                // REMOVE LATER
                 Bit#(`MAX_INDEX_SIZE) index = 0;
+                Bit#(`MAX_TAGGED) tag = 0;
                 // Get the index to avoid recomputing
                 let tab = taggedTablesVector[pred_index];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); /*))
-
-                $display("BLUESPEC TABLE INDEX %d %d\n",pred_index, index);
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); tag = zeroExtend(tpl_1(t.trainingInfo(currentPc, False))); /*))
+                $display("BLUESPEC TABLE INDEX %d %d %d\n",pred_index, index, tag);
+                
                 ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
-
                 if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
                     ret.alt_table = tagged Valid alt_index;
                     

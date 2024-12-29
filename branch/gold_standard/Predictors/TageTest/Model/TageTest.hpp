@@ -138,7 +138,7 @@ namespace gold_standard {
             //printf("GOLD STANDARD INDEX %d %d\n", get_bimodal_index(ip).first, get_bimodal_index(ip).second);
             last_training_data.taken = last_training_data.provider_prediction;
         }else{
-            fprintf(file,"GOLD STANDARD INDEX %d %d %d\n", ip, provider, tagged_tables[provider]->get_index(ip));
+            fprintf(file,"GOLD STANDARD INDEX %d %d %d %d\n", ip, provider, tagged_tables[provider]->get_index(ip), tagged_tables[provider]->compute_tag(ip));
             last_training_data.use_bimodal = false;
             last_training_data.pred_table = provider;
             last_training_data.provider_prediction = provider_entry.counter > WEAK_NOT_TAKEN;
@@ -205,8 +205,12 @@ namespace gold_standard {
             }
             // Decrement all entries https://inria.hal.science/hal-03408381/document
             if(replaceable_entries.size() == 0){
+                printf("GOLD STANDARD All useful counters are zero\n");
                 for(uint32_t i = start; i < tagged_tables.size(); i++){
                     int t_index = tagged_tables[i]->get_index(ip);
+                    if(t_index == 154) {
+                        fprintf(file, "GOLD STANDARD decrement %d %d", i, t_index);
+                    }
                     tagged_entry tab = tagged_tables[i]->get_entry(t_index);
                     update_counter(tab.useful_counter, false, U_COUNTER_MAX);
                     tagged_tables[i]->set_entry(t_index, tab);
@@ -225,7 +229,7 @@ namespace gold_standard {
                     replace_table_index = replaceable_entries[2];
                 }
 
-                fprintf(file, "GOLD STANDARD ALLOCATE FOR: %d %d %d\n", ip, replace_table_index, tagged_tables[replace_table_index]->get_index(ip));
+                fprintf(file, "GOLD STANDARD ALLOCATE FOR: %d %d %d %d\n", ip, replace_table_index, tagged_tables[replace_table_index]->get_index(ip), tagged_tables[replace_table_index]->compute_tag(ip));
                 if(replace_table_index < tagged_tables.size()){
                     tagged_tables[replace_table_index]->allocate_entry(
                         ip,
@@ -254,7 +258,6 @@ namespace gold_standard {
             fprintf(file, "GOLD STANDARD PROVIDER ENTRY COUNTER %d\n", t.counter);
             fprintf(file, "GOLD STANDARD PROVIDER USEFUL COUNTER %d\n", t.useful_counter);
             /* Remove later */
-
 
             // Update ALT_ON_NA
             if(t.useful_counter == 0 && (t.counter == WEAK_NOT_TAKEN || t.counter == WEAK_TAKEN)){   
