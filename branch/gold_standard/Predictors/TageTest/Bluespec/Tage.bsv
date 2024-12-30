@@ -245,15 +245,12 @@ module mkTage(Tage#(numTables)) provisos(
         Maybe#(TableIndex#(numTables)) ret = tagged Invalid;
         
         // Recover histories first
-        //WARNING MUST REMOVE THIS REDUNDANCY
-        
-        
         let recoverNumber = numSpecInFlight-1;
-        let a <- global.recoverFrom[recoverNumber].undo;
+        global.recoverFrom[recoverNumber].undo;
         for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
             let tab = taggedTablesVector[i];
-            /* WARNING THIS MUST BE CHANGED LATER - NEED A MECHANISM FOR THE NUMBER OF BRANCHES*/
-            `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(recoverNumber); /*))
+            /* It is untested if this will work for Toooba */
+            `CASE_ALL_TABLES(tab, (*/ t.recoverHistory(recoverNumber); /*))
         end
 
         if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin

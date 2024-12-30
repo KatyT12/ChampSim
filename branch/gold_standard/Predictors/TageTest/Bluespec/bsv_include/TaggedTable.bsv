@@ -45,7 +45,7 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
-    method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery);
+    method Action recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery);
     
 
     method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool taken, UsefulCtrUpdate usefulUpdate);
@@ -114,7 +114,7 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateHistory(global, taken);
     method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateRecoveredHistory(global, taken);
-    method ActionValue#(Bit#(foldedSize)) recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery) = folded.recoverFrom[numRecovery].undo;
+    method Action recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery) = folded.recoverFrom[numRecovery].undo;
 
   
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc, Bool recovered); // To be used in training

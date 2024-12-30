@@ -6,7 +6,10 @@ import ConfigReg::*;
 import Ehr::*;
 
 interface RecoverMechanism#(numeric type length);
-    method ActionValue#(Bit#(length)) undo;
+    method Action undo;
+    `ifdef DEBUG
+    method ActionValue#(Bit#(length)) debugUndo;
+    `endif
 endinterface
 
 interface GlobalBranchHistory#(numeric type length);
@@ -42,14 +45,28 @@ module mkGlobalBranchHistory(GlobalBranchHistory#(length));
         last_removed_history <= truncateLSB({last_removed_history, shift_register[1][valueOf(length)-1]} << 1);
     endrule
 
+    function ActionValue#(Bit#(length)) undoHistory(Bit#(TLog#(MaxSpecSize)) i);
+        actionvalue
+            recover.send;
+            UInt#(TLog#(MaxSpecSize)) j = unpack(i);
+            Bit#(length) recovered = (last_removed_history[j:0] << (valueOf(length)-1)) >> i | truncateLSB(shift_register[0] >> (i+1));
+            shift_register[0] <= recovered;
+            return recovered;
+        endactionvalue
+    endfunction
+
     for(Integer i = 0; i < valueOf(MaxSpecSize); i = i+1) begin
         recoverIfc[i] = (interface RecoverMechanism#(length);
-            method ActionValue#(Bit#(length)) undo;
-                recover.send;
-                Bit#(length) recovered = last_removed_history[i:0] << (valueOf(length)-i-1) | truncateLSB(shift_register[0] >> (i+1));
-                shift_register[0] <= recovered;
-                return recovered;
+            method Action undo;
+                let a <- undoHistory(fromInteger(i));
             endmethod
+
+            `ifdef DEBUG
+            method ActionValue#(Bit#(length)) debugUndo;
+                let ret <- undoHistory(fromInteger(i));
+                return ret;
+            endmethod
+            `endif
         endinterface);
     end
     interface recoverFrom = recoverIfc;
