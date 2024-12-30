@@ -11,7 +11,6 @@
 #include <functional>
 #include <cassert>
 #include <cstring>
-#include <queue>
 #include "gold_standard.hpp"
 #include "types.h"
 
@@ -40,11 +39,13 @@ class bsv_predictor final : public predictor_concept{
 
       void initiate_bsim();
       uint8_t read_prediction_response(uint64_t ip);
+      bool last_was_conditional = false;
 
     public:
 
       DebugData last_debug_entry;
       bsv_predictor() : last_prediction{}, count(0), total_prefetched(0) {}
+      bool last_conditional();
       void initialise();
       void last_branch_result(uint64_t ip, uint64_t target, uint8_t taken, uint8_t branch_type);
       virtual uint8_t predict_branch(uint64_t ip);
@@ -95,6 +96,7 @@ uint8_t bsv_predictor::read_prediction_response(uint64_t ip){
         if(recieved_ip == ip){
           out = buff[0] - '0';
           count++; last_recieved = ip;
+          last_was_conditional = true;
           debug_printf("Prediction Done %ld\n", recieved_ip);
         }
         else{
@@ -109,10 +111,12 @@ uint8_t bsv_predictor::read_prediction_response(uint64_t ip){
 uint8_t bsv_predictor::predict_branch(uint64_t ip){
    uint8_t out = 0;
    debug_printf("Predict %ld\n", ip);
-   
+   last_was_conditional = false;
+
    if(last_prediction){
     if((*last_prediction).first == ip){
       out = (*last_prediction).second;
+      last_was_conditional = true;
       debug_printf("Prediction Recieved %ld, %d\n", ip, out);
       last_prediction.reset();
       count++; last_recieved = ip;
@@ -135,6 +139,10 @@ void bsv_predictor::last_branch_result(uint64_t ip, uint64_t branch_target, uint
    }
     //write_update(ip, branch_target, taken, branch_type);
   return;
+}
+
+bool bsv_predictor::last_conditional(){
+  return last_was_conditional;
 }
 
 void bsv_predictor::initialise(){

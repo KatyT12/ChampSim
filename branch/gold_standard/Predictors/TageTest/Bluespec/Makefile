@@ -9,7 +9,7 @@ BSV_INCLUDE = $(TOPDIR)/bsv_include:../../../bsv_include
 SIM_DIR ?= $(BUILD_DIR)/build_bsim
 BUILD_DIR ?= $(TOPDIR)/Build
 
-FILE_NAME ?= Testbench
+FILE_NAME ?= TableTestBench
 TOPFILE   ?= $(TESTBENCH_PATH)/$(FILE_NAME).bsv
 TOPMODULE ?= mk$(FILE_NAME)
 
@@ -22,17 +22,40 @@ BSC_PATHS = -p $(BSV_SRC):$(BSV_INCLUDE):$(PL)
 BSIM_DIRS = -simdir $(SIM_DIR) -bdir $(SIM_DIR) -info-dir $(SIM_DIR)
 BSIM_EXE = $(BUILD_DIR)/$(TOPMODULE)_bsim
 
-all_bsim: full_clean compile  link simulate
+ifdef DEBUG
+	DEBUG_MACRO ?= DEBUG
+else
+	DEBUG_MACRO ?= NONE
+endif
 
+ifdef OFF_GOLD_STANDARD
+	GOLD_STANDARD_MACRO = OFF_GOLD_STANDARD
+else
+	GOLD_STANDARD_MACRO = NONE
+endif
+
+all_bsim: full_clean build_bsim generate_mem_files compile  link simulate
+
+
+
+MEM_BASE_NAME = regfileMemInit
+MEM_FILE_SIZES = 512:0 8192:1 2048:0
+
+generate_mem_files:
+	@for pair in $(MEM_FILE_SIZES); do \
+			size=$$(echo $$pair | cut -d':' -f1); \
+			init=$$(echo $$pair | cut -d':' -f2); \
+			printf "%.0s$$init\n" $$(seq 1 $$size) > $(BUILD_DIR)/$(MEM_BASE_NAME)_$$size.mem; \
+	done
 
 build_bsim:
 	mkdir -p $(BUILD_DIR)
 	mkdir  -p $(SIM_DIR)
 
 .PHONY: compile
-compile: build_bsim
+compile:
 	@echo Compiling for Bluesim ...
-	bsc -u -sim $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
+	bsc -u -sim -D $(DEBUG_MACRO) -D $(GOLD_STANDARD_MACRO) $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
 	@echo Compiling for Bluesim finished
 
 .PHONY: link
