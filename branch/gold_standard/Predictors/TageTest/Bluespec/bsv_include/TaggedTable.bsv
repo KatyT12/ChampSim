@@ -164,10 +164,7 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
 
     // 3 bits 100 011
     method Action allocateEntry(Addr pc,  Bool taken);
-        
         match {.tag, .index} = getHistory(True, pc);
-
-        $display("Tag:%b Index: %b", tag, index);
         // Weakly taken = 100 - 1, weakly not taken = 100 - 1
         Bit#(PredCtrSz) counter_init = 1 << (valueOf(PredCtrSz)-1);
         if (!taken) begin
@@ -177,8 +174,4 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
         TaggedTableEntry#(tagSize) toWrite = TaggedTableEntry{predictionCounter: counter_init, usefulCounter:  0, tag: tag};
         tab.upd(index, toWrite);
     endmethod
-    //method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc);
-
-    //endmethod
-
 endmodule

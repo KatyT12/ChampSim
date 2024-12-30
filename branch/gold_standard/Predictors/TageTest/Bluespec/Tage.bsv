@@ -175,8 +175,6 @@ module mkTage(Tage#(numTables)) provisos(
                 // Is this compile time or is it forced to be sequential???
             for (Integer j = 0; j < 2*(len/2); j = j + 2) begin
                 if (entries_compare[j+1] matches tagged Valid .x) begin
-                    //$display("DEBUG %d %d\n", i, j);
-                    //$display("DEBUG COMPARE ", fshow(entries_compare[j])," ", fshow(entries_compare[j+1]), "\n");
                     if(altpred_compare[j+1] matches tagged Valid .x)
                         altpred[j / 2] = altpred_compare[j+1];
                     else
@@ -190,7 +188,6 @@ module mkTage(Tage#(numTables)) provisos(
                 end
             end
             if (len % 2 == 1) begin
-                //$display("Length %d\n", len);
                 pred[(len/2)] = entries_compare[len-1];
                 altpred[(len/2)] = tagged Invalid;
             end
@@ -254,7 +251,9 @@ module mkTage(Tage#(numTables)) provisos(
         end
 
         if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
-            $display("Do Nothing\n");
+            `ifdef DEBUG
+                $display("Do Nothing\n");
+            `endif
         end
         else begin
             // Do this on prediction as we access all tables then anyway (?)
@@ -267,21 +266,10 @@ module mkTage(Tage#(numTables)) provisos(
             // Remove all entries before the starting table we are considering
             Bit#(numTables) tabsReplaceable = (train.replaceableEntries >> start) << start;
             if(tabsReplaceable == 0) begin
-                $display("BLUESPEC All useful counters are zero\n");
                 // Decrement all counters as in original TAGE, worried about the circuitry there
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
                     if  (fromInteger(i) >= start) begin
                         let tab = taggedTablesVector[i];
-
-                        /* REMOVE THIS*/
-                        Bit#(20) index;
-                        `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, True))); /*))
-                        if(index == 154) begin
-                            $display("BLUESPEC decrement %d %d\n", i, 154);
-                        end
-                        /* REMOVE THIS*/
-
-
                         `CASE_ALL_TABLES(tab, (*/ t.decrementUsefulCounter(train.pc); /*))
                     end
                 end
@@ -292,7 +280,6 @@ module mkTage(Tage#(numTables)) provisos(
                 
                 Bit#(3) randNum = {lfsr.value[2:1], lfsr.value[0] | lfsr.value[3]};
                 Bool found = False;
-
                 TableIndex#(numTables) ind = 0;
                 
                 `ifdef DEBUG
@@ -302,7 +289,6 @@ module mkTage(Tage#(numTables)) provisos(
                 `endif
 
                 // A better way than sequential?
-                
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
                     if(unpack(tabsReplaceable[i])) begin
                         if(!found && (num == 'b10 || unpack(randNum[2]))) begin
@@ -316,15 +302,6 @@ module mkTage(Tage#(numTables)) provisos(
 
                 `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
                 ret = tagged Valid ind;
-
-
-                /* REMOVE LATER */
-                Bit#(20) index = 0;
-                Bit#(`MAX_TAGGED) tag = 0;
-                
-                let tab = taggedTablesVector[ind];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, True))); tag = zeroExtend(tpl_1(t.trainingInfo(train.pc, True))); /*))
-                $display(2,"BLUESPEC ALLOCATE FOR %d %d %d %d\n",currentPc, ind, index, tag);
             end
         end
         return ret;
@@ -337,9 +314,6 @@ module mkTage(Tage#(numTables)) provisos(
         predIfc[i] = (interface DirPred;
         
         method ActionValue#(DirPredResult#(TageTrainInfo#(numTables))) pred;
-            $display("BLUESPEC PREDICT %d", currentPc);
-            $display("BLUESPEC LFSR %d\n", lfsr.value);
-            $display("BLUESPEC ALT_ON_NA %d\n", alt_on_na);
             TageTrainInfo#(numTables) ret = unpack(0);
             
             // Retrieve provider and alternative table
@@ -351,14 +325,11 @@ module mkTage(Tage#(numTables)) provisos(
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
                 ret.provider_prediction = prediction;
                 
-                // REMOVE LATER
+                // Get the index to avoid recomputing on update (not possible unless mispredict)
                 Bit#(`MAX_INDEX_SIZE) index = 0;
-                Bit#(`MAX_TAGGED) tag = 0;
-                // Get the index to avoid recomputing
                 let tab = taggedTablesVector[pred_index];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); tag = zeroExtend(tpl_1(t.trainingInfo(currentPc, False))); /*))
-                $display("BLUESPEC TABLE INDEX %d %d %d\n",pred_index, index, tag);
-                
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); /*))
+
                 ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
                 if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
                     ret.alt_table = tagged Valid alt_index;
@@ -384,8 +355,6 @@ module mkTage(Tage#(numTables)) provisos(
                 end
             end
             else begin
-                //$display("BLUESPEC BIMODAL INDICES %d\n", currentPc);
-                //$display(fshow(bimodalTable.trainingInfo(currentPc)));
                 ret.alt_table = tagged Invalid;
                 ret.provider_info = tagged Invalid;
                 ret.use_alt = False;
@@ -473,20 +442,6 @@ module mkTage(Tage#(numTables)) provisos(
                 `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken, u); /*))
 
                 // ALT_ON_NA
-                
-                /* Remove later */
-
-                if(train.alt_table matches tagged Valid .alt_t) begin
-                    $display("BLUESPEC UPDATE ALT PRED TABLE %d\n", alt_t);
-                end
-                else
-                    $display("BLUESPEC UPDATE ALT PRED BIMODAL\n");
-                $display("BLUESPEC UPDATE ALT PRED TAKEN %d\n", train.alt_prediction);
-                $display("BLUESPEC PROVIDR ENTRY COUNTER %d\n", entry.predictionCounter);
-                $display("BLUESPEC PROVIDR ENTRY USEFUL %d\n", entry.usefulCounter);
-
-                /* Remove later */
-                
                 if(entry.usefulCounter == 0 && weakCounter(entry.predictionCounter)) begin
                     if(train.alt_prediction != train.provider_prediction)
                         alt_on_na <= unpack(boundedUpdate(pack(alt_on_na), train.alt_prediction == taken));
