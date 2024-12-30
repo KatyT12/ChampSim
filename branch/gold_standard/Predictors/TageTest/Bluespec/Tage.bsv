@@ -117,6 +117,7 @@ interface Tage#(numeric type numTables);
         method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
         method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
+        method TaggedTableEntry#(`MAX_TAGGED) debugGetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
         method PredictionTableInfo#(numTables) debugPredAltpred;
     `endif
 endinterface
@@ -136,11 +137,11 @@ module mkTage(Tage#(numTables)) provisos(
     TaggedTable#(9,12,130)  t7 <- mkTaggedTable;
 
     
-    BimodalTable#(13, 11) bimodalTable <- mkBimodalTable;
+    BimodalTable#(13, 11) bimodalTable <- mkBimodalTable(regInitFilenameBimodalPred, regInitFilenameBimodalHyst);
     Vector#(7, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(t1), cons(T_9_9_9(t2), cons(T_9_10_15(t3), cons(T_9_10_25(t4), cons(T_9_11_44(t5), cons(T_9_11_76(t6), cons(T_9_12_130(t7), nil)))))));
     Reg#(Addr) currentPc <- mkRegU;
     Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
-    
+    Reg#(Bit#(TLog#(MaxSpecSize))) numSpecInFlight <- mkReg(0);
     // For the LFSR
     LFSR#(Bit#(4)) lfsr <- mkLFSR_4;
     Reg#(Bool) starting <- mkReg(True);
@@ -154,8 +155,10 @@ module mkTage(Tage#(numTables)) provisos(
             lfsr.seed('d9);
             starting <= False;
         end
+        `ifdef OFF_GOLD_STANDARD
         else
             lfsr.next;
+        `endif
     endrule
 
     function Bool useAlt;
@@ -172,8 +175,6 @@ module mkTage(Tage#(numTables)) provisos(
                 // Is this compile time or is it forced to be sequential???
             for (Integer j = 0; j < 2*(len/2); j = j + 2) begin
                 if (entries_compare[j+1] matches tagged Valid .x) begin
-                    //$display("DEBUG %d %d\n", i, j);
-                    //$display("DEBUG COMPARE ", fshow(entries_compare[j])," ", fshow(entries_compare[j+1]), "\n");
                     if(altpred_compare[j+1] matches tagged Valid .x)
                         altpred[j / 2] = altpred_compare[j+1];
                     else
@@ -187,7 +188,6 @@ module mkTage(Tage#(numTables)) provisos(
                 end
             end
             if (len % 2 == 1) begin
-                //$display("Length %d\n", len);
                 pred[(len/2)] = entries_compare[len-1];
                 altpred[(len/2)] = tagged Invalid;
             end
@@ -208,7 +208,7 @@ module mkTage(Tage#(numTables)) provisos(
             `CASE_ALL_TABLES(tab, 
             (*/
                 // Could do this in one
-                match {.tag, .index} = t.trainingInfo(currentPc);
+                match {.tag, .index} = t.trainingInfo(currentPc, False);
                 let entry = t.access_wrapped_entry(currentPc);
                 replaceableEntries[i] = pack(entry.usefulCounter == 0);
                 
@@ -219,7 +219,7 @@ module mkTage(Tage#(numTables)) provisos(
                 /*)
             )
         end
-
+        
         Integer len = valueOf(numTables);
         match{.pred_vec, .altpred_vec} = treeFindPred(len, valueOf(TLog#(numTables)), entries_compare, altpred_compare);
 
@@ -242,16 +242,18 @@ module mkTage(Tage#(numTables)) provisos(
         Maybe#(TableIndex#(numTables)) ret = tagged Invalid;
         
         // Recover histories first
-        //WARNING MUST REMOVE THIS REDUNDANCY
-        let a <- global.recoverFrom[0].undo;
+        let recoverNumber = numSpecInFlight-1;
+        global.recoverFrom[recoverNumber].undo;
         for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
             let tab = taggedTablesVector[i];
-            /* WARNING THIS MUST BE CHANGED LATER - NEED A MECHANISM FOR THE NUMBER OF BRANCHES*/
-            `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(0); /*))
+            /* It is untested if this will work for Toooba */
+            `CASE_ALL_TABLES(tab, (*/ t.recoverHistory(recoverNumber); /*))
         end
 
         if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
-            $display("Do Nothing\n");
+            `ifdef DEBUG
+                $display("Do Nothing\n");
+            `endif
         end
         else begin
             // Do this on prediction as we access all tables then anyway (?)
@@ -266,7 +268,7 @@ module mkTage(Tage#(numTables)) provisos(
             if(tabsReplaceable == 0) begin
                 // Decrement all counters as in original TAGE, worried about the circuitry there
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
-                    if  (fromInteger(i) > start) begin
+                    if  (fromInteger(i) >= start) begin
                         let tab = taggedTablesVector[i];
                         `CASE_ALL_TABLES(tab, (*/ t.decrementUsefulCounter(train.pc); /*))
                     end
@@ -274,15 +276,14 @@ module mkTage(Tage#(numTables)) provisos(
             end
             else begin
                 // overkill?
-                Bit#(TAdd#(TLog#(TAdd#(numTables,1)),1)) num = 1 << countOnes(tabsReplaceable);
+                Bit#(TAdd#(numTables,1)) num = 1 << countOnes(tabsReplaceable);
                 
                 Bit#(3) randNum = {lfsr.value[2:1], lfsr.value[0] | lfsr.value[3]};
                 Bool found = False;
-
                 TableIndex#(numTables) ind = 0;
                 
                 `ifdef DEBUG
-                $display(fshow(ind), " Rand:", fshow(randNum),  " Number to choose:", fshow(num), "\n");
+                $display(fshow(start), " Rand:", fshow(randNum),  " Number to choose:", fshow(num), "\n");
                 $display("%b\n",train.replaceableEntries);
                 $display("%b\n",tabsReplaceable);
                 `endif
@@ -298,6 +299,7 @@ module mkTage(Tage#(numTables)) provisos(
                         num = num >> 1;
                     end
                 end
+
                 `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
                 ret = tagged Valid ind;
             end
@@ -317,18 +319,18 @@ module mkTage(Tage#(numTables)) provisos(
             // Retrieve provider and alternative table
             match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred;
             ret.replaceableEntries = replaceableEntries;
-
+            ret.pc = currentPc;
 
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
                 ret.provider_prediction = prediction;
+                
+                // Get the index to avoid recomputing on update (not possible unless mispredict)
                 Bit#(`MAX_INDEX_SIZE) index = 0;
-                // Get the index to avoid recomputing
                 let tab = taggedTablesVector[pred_index];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc))); /*))
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); /*))
 
                 ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
-
                 if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
                     ret.alt_table = tagged Valid alt_index;
                     
@@ -369,8 +371,8 @@ module mkTage(Tage#(numTables)) provisos(
                 `CASE_ALL_TABLES(tab, (*/ t.updateHistory(global, pack(ret.taken)); /*))
             end
 
-            // Update LSFR
-            
+            numSpecInFlight <= numSpecInFlight + 1;
+           
             // Also update histories
             return DirPredResult {
                 taken: ret.taken,
@@ -380,12 +382,11 @@ module mkTage(Tage#(numTables)) provisos(
         endinterface);
     end
 
-   
     `ifdef DEBUG
     method Action debugTables(Addr pc);
         for(Integer i = 0; i < 7; i=i+1) begin
             ChosenTaggedTables tab = taggedTablesVector[i];
-            `CASE_ALL_TABLES(tab, (*/match {.c, .d} = t.trainingInfo(pc); $display("%d %d\n", c, d);/*))    
+            `CASE_ALL_TABLES(tab, (*/match {.c, .d} = t.trainingInfo(pc, False); $display("%d %d\n", c, d);/*))    
         end
     endmethod
 
@@ -407,6 +408,11 @@ module mkTage(Tage#(numTables)) provisos(
     method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
         let ind <- allocate(train, taken);
         return ind;
+    endmethod
+
+    method TaggedTableEntry#(`MAX_TAGGED) debugGetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
+        ChosenTaggedTables tab = taggedTablesVector[tableNum];
+        `CASE_ALL_TABLES(tab, (*/ return t.access_wrapped_entry(pc); /*))
     endmethod
     `endif
 
@@ -433,7 +439,7 @@ module mkTage(Tage#(numTables)) provisos(
                     u = DECREMENT;
 
                 ChosenTaggedTables providerTable = taggedTablesVector[info.provider_table];
-                `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken == train.provider_prediction, u); /*))
+                `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken, u); /*))
 
                 // ALT_ON_NA
                 if(entry.usefulCounter == 0 && weakCounter(entry.predictionCounter)) begin
@@ -449,7 +455,17 @@ module mkTage(Tage#(numTables)) provisos(
                     let tab = taggedTablesVector[i];
                     `CASE_ALL_TABLES(tab, (*/ t.updateRecovered(global, pack(taken)); /*))
                 end
+                numSpecInFlight <= 0; // Assuming pipeline is flushed!
             end
+            else
+                numSpecInFlight <= numSpecInFlight - 1; // Assuming in order
+            
+
+
+            // Update LSFR
+            `ifndef OFF_GOLD_STANDARD
+             lfsr.next;
+            `endif
         endmethod
     
         method Action nextPc(Addr pc);

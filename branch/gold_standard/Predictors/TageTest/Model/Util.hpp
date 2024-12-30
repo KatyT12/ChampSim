@@ -29,7 +29,7 @@ namespace gold_standard {
     class table{
         public:
             virtual void print_size() = 0;
-            virtual void update_history(std::bitset<GLOBAL_SIZE>& global, std::bitset<PATH_HISTORY_SIZE> path) = 0;
+            virtual void update_history(std::bitset<GLOBAL_SIZE>& global, std::bitset<PATH_HISTORY_SIZE>& path) = 0;
             
             virtual int get_index(uint64_t pc) = 0;
             virtual uint16_t compute_tag(uint64_t pc) = 0;
@@ -50,12 +50,15 @@ namespace gold_standard {
             uint8_t tag_size;
             
             
-            std::bitset<params.index_size> folded_history;
+            std::bitset<params.index_size+params.tag_size> folded_history;
             std::bitset<params.index_size> folded_path_history;
             std::bitset<params.tag_size> folded_tag; // History for the tag
             
             tagged_table(){
                 entries.fill(tagged_entry{0,0,TAGE_PRED_CTR_INIT});
+                folded_history.reset();
+                folded_path_history.reset();
+                folded_tag.reset();
             }
             
             int get_index(uint64_t pc);
@@ -66,7 +69,7 @@ namespace gold_standard {
             void allocate_entry(uint64_t pc, bool taken);
             void set_entry(uint32_t index, tagged_entry t);
             
-            void update_history(std::bitset<GLOBAL_SIZE>& global, std::bitset<PATH_HISTORY_SIZE> path);
+            void update_history(std::bitset<GLOBAL_SIZE>& global, std::bitset<PATH_HISTORY_SIZE>& path);
 
             void print_size() override {
                 printf("%ld\n", entries.size());

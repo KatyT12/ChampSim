@@ -37,13 +37,13 @@ interface BimodalTable#(numeric type predIndexSize, numeric type hystIndexSize);
     `endif
 endinterface
 
-module mkBimodalTable(BimodalTable#(predIndexSize, hystIndexSize)) provisos(
+module mkBimodalTable#(String predInitFile, String hystInitFile)(BimodalTable#(predIndexSize, hystIndexSize)) provisos(
     Add#(hystIndexSize, c_, predIndexSize),
     Add#(predIndexSize, a_, 64),
     Add#(hystIndexSize, b_, 64)
     );
-    RegFile#(Bit#(predIndexSize), BimodalPredictionEntry) predTable <- mkRegFileWCF(0, maxBound);
-    RegFile#(Bit#(hystIndexSize), BimodalHysteresisEntry) hystTable <- mkRegFileWCF(0, maxBound);
+    RegFile#(Bit#(predIndexSize), BimodalPredictionEntry) predTable <- mkRegFileWCFLoad(predInitFile, 0, maxBound);
+    RegFile#(Bit#(hystIndexSize), BimodalHysteresisEntry) hystTable <- mkRegFileWCFLoad(hystInitFile, 0, maxBound);
 
     
     function BimodalInd#(predIndexSize, hystIndexSize) pcToIndex(Addr pc);
@@ -64,7 +64,6 @@ module mkBimodalTable(BimodalTable#(predIndexSize, hystIndexSize)) provisos(
         match {.pred_ind, .hyst_ind} = pcToIndex(pc);
         Bit#(2) currentEntry = {pack(predTable.sub(pred_ind)), pack(hystTable.sub(hyst_ind))};
         currentEntry = boundedUpdate(currentEntry, taken);
-        
         predTable.upd(pred_ind, unpack(currentEntry[1]));
         hystTable.upd(hyst_ind, unpack(currentEntry[0]));
     endmethod

@@ -28,17 +28,34 @@ else
 	DEBUG_MACRO ?= NONE
 endif
 
-all_bsim: full_clean compile  link simulate
+ifdef OFF_GOLD_STANDARD
+	GOLD_STANDARD_MACRO = OFF_GOLD_STANDARD
+else
+	GOLD_STANDARD_MACRO = NONE
+endif
 
+all_bsim: full_clean build_bsim generate_mem_files compile  link simulate
+
+
+
+MEM_BASE_NAME = regfileMemInit
+MEM_FILE_SIZES = 512:0 8192:1 2048:0
+
+generate_mem_files:
+	@for pair in $(MEM_FILE_SIZES); do \
+			size=$$(echo $$pair | cut -d':' -f1); \
+			init=$$(echo $$pair | cut -d':' -f2); \
+			printf "%.0s$$init\n" $$(seq 1 $$size) > $(BUILD_DIR)/$(MEM_BASE_NAME)_$$size.mem; \
+	done
 
 build_bsim:
 	mkdir -p $(BUILD_DIR)
 	mkdir  -p $(SIM_DIR)
 
 .PHONY: compile
-compile: build_bsim
+compile:
 	@echo Compiling for Bluesim ...
-	bsc -u -sim -D $(DEBUG_MACRO) $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
+	bsc -u -sim -D $(DEBUG_MACRO) -D $(GOLD_STANDARD_MACRO) $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
 	@echo Compiling for Bluesim finished
 
 .PHONY: link

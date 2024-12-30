@@ -53,7 +53,7 @@ module mkTableTestBench(Empty);
 
                 let t = tg.access_entry(13);
                 $display("Normal: %d %d %d\n",t.tag, t.predictionCounter, t.usefulCounter);
-                match {.a1, .a2} = tg.trainingInfo(13);
+                match {.a1, .a2} = tg.trainingInfo(13, False);
                 $display("Normal tag %d, index %d\n",a1, a2);
 
                 if(count % 20 == 0) begin

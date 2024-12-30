@@ -10,6 +10,7 @@
 #include <cassert>
 #include<bitset>
 #include<optional>
+#include <cstdio>
 
 
 /*
@@ -50,13 +51,14 @@ namespace gold_standard {
     // Index size, Tag size, History length
     std::bitset<GLOBAL_SIZE> global_history;
     std::bitset<PATH_HISTORY_SIZE> path_history;
+    
 
     std::array<uint64_t, prediction_entries> bimodal_prediction_bits;
     std::array<uint64_t, hysteresis_entries> bimodal_hysteresis_bits;
     tagged_tables_type tagged_tables;
     trainingInfo last_training_data;
     uint8_t alt_on_na;
-    lfsr<4> feedback_shift_register(2,9);
+    lfsr<4> feedback_shift_register(9,9);
 
     constexpr table_parameters t1{9,9,5};   
     constexpr table_parameters t2{9,9,9};
@@ -66,7 +68,17 @@ namespace gold_standard {
     constexpr table_parameters t6{9,11,76};
     constexpr table_parameters t7{9,12,130};
 
+    /* Remove later, debugging */
+    int count = 0;
+    FILE *file;
+
     void gold_standard_predictor::impl_initialise(){
+
+        /* REMOVE LATER */
+        
+        file = fopen("error.log", "w");
+        
+        /* REMOVE LATER */
 
         tagged_tables.push_back(std::make_unique<tagged_table<t1>>());
         tagged_tables.push_back(std::make_unique<tagged_table<t2>>());
@@ -83,7 +95,7 @@ namespace gold_standard {
         bimodal_prediction_bits.fill(~(uint64_t)0);
         bimodal_hysteresis_bits.fill(0);
 
-        alt_on_na = ALT_ON_NA_THRESHOLD - 1;   
+        alt_on_na = ALT_ON_NA_THRESHOLD;   
         std::cout << "Initialized\n";
     }
 
@@ -96,6 +108,7 @@ namespace gold_standard {
         tagged_entry provider_entry;
         tagged_entry alt_entry;
         
+        //printf("GOLD STANDARD PREDICT %d, LSFSR %d", ip)
         
         for(int i = tagged_tables.size()-1; i >= 0; i--){
             
@@ -113,7 +126,7 @@ namespace gold_standard {
             }
             debug_printf("%ld\n", ip);
         }
-        //printf("%d %d %d %d\n", found_provider, found_alt, alt, provider);
+        
         if(found_provider){
             debug_printf("%d\n", provider_entry.counter);
         }
@@ -122,8 +135,12 @@ namespace gold_standard {
         if(!found_provider){
             last_training_data.use_bimodal = true;
             last_training_data.provider_prediction = access_bimodal_entry(ip) == 1;
+            //printf("GOLD STANDARD INDEX %d %d\n", get_bimodal_index(ip).first, get_bimodal_index(ip).second);
             last_training_data.taken = last_training_data.provider_prediction;
         }else{
+            if(DEBUG)
+                fprintf(file,"GOLD STANDARD INDEX %d %d %d %d\n", ip, provider, tagged_tables[provider]->get_index(ip), tagged_tables[provider]->compute_tag(ip));
+
             last_training_data.use_bimodal = false;
             last_training_data.pred_table = provider;
             last_training_data.provider_prediction = provider_entry.counter > WEAK_NOT_TAKEN;
@@ -145,16 +162,22 @@ namespace gold_standard {
 
 
         // DODGY - meant to be done each cycle
-        feedback_shift_register.next();
+        //feedback_shift_register.next();
 
-        //print_training_data(last_training_data);
+        //printf("GOLD STANDARD PRED %d %d %d %d\n", found_provider, found_alt, alt, provider);
+        //printf("%d %d %d %d\n", found_provider, found_alt, alt, provider);
+        //printf("GOLD STANDARD PREDICTS: %d\n",last_training_data.taken);
         return last_training_data.taken;
-
-
     }
 
     // Luckily updates are immediately after the predictions
     void gold_standard_predictor::impl_last_branch_result(uint64_t ip, uint64_t target, uint8_t taken, uint8_t branch_type){        
+        if(DEBUG) {
+            fprintf(file, "UPDATE %d\n", count);
+            fprintf(file, "GOLD STANDARD PRED %llu %llu\n", ip, feedback_shift_register.get().to_ulong());
+            fprintf(file, "GOLD STANDARD ALT_ON_NA %llu\n", alt_on_na);
+        }
+        
         bool branch_taken = taken > 0;
         // ********* Bimodal update
         std::pair<uint32_t, uint32_t> bimodal_index = get_bimodal_index(ip);
@@ -189,8 +212,9 @@ namespace gold_standard {
                     tagged_tables[i]->set_entry(t_index, tab);
                 }
             }else{
+                
                 // CHECK - Ping pong phenomenae
-                uint8_t a = feedback_shift_register.get().to_ulong() & 0x7;
+                uint8_t a = feedback_shift_register.get().to_ulong() & 0x7 | feedback_shift_register.get().test(3);
                 uint32_t replace_table_index;
                 debug_printf("Random: %d\n",a);
                 if(replaceable_entries.size() == 1 || a >= 4){ // 1/2 chance
@@ -200,7 +224,9 @@ namespace gold_standard {
                 } else {
                     replace_table_index = replaceable_entries[2];
                 }
-                
+
+                if(DEBUG)
+                    fprintf(file, "GOLD STANDARD ALLOCATE FOR: %d %d %d %d\n", ip, replace_table_index, tagged_tables[replace_table_index]->get_index(ip), tagged_tables[replace_table_index]->compute_tag(ip));
                 if(replace_table_index < tagged_tables.size()){
                     tagged_tables[replace_table_index]->allocate_entry(
                         ip,
@@ -219,16 +245,17 @@ namespace gold_standard {
             uint16_t index = pred->get_index(ip);
             tagged_entry t = pred->get_entry(index);
             
-            // Update counter regardless
-            update_counter(t.counter, taken, COUNTER_MAX);
-            // Update useful counters
-            if(last_training_data.provider_prediction == branch_taken && last_training_data.alt_prediction != branch_taken) {
-                update_counter(t.useful_counter, true, U_COUNTER_MAX);
-            }else if(last_training_data.provider_prediction != branch_taken && last_training_data.alt_prediction == branch_taken) {
-                update_counter(t.useful_counter, false, U_COUNTER_MAX);
+            if(DEBUG){
+                if(last_training_data.alt_bimodal){
+                    fprintf(file, "GOLD STANDARD ALT PRED BIMODAL\n");
+                }else{
+                    fprintf(file, "GOLD STANDARD ALT PRED TABLE %d\n", last_training_data.alt_table);
+                }
+                fprintf(file, "GOLD STANDARD ALT PRED TAKEN %d\n", last_training_data.alt_prediction);
+                fprintf(file, "GOLD STANDARD PROVIDER ENTRY COUNTER %d\n", t.counter);
+                fprintf(file, "GOLD STANDARD PROVIDER USEFUL COUNTER %d\n", t.useful_counter);
             }
-            pred->set_entry(index, t);
-
+            
             // Update ALT_ON_NA
             if(t.useful_counter == 0 && (t.counter == WEAK_NOT_TAKEN || t.counter == WEAK_TAKEN)){   
                 if(last_training_data.alt_prediction != last_training_data.provider_prediction){
@@ -236,6 +263,16 @@ namespace gold_standard {
                 }
 
             }
+
+            // Update counter regardless
+            update_counter(t.counter, branch_taken, COUNTER_MAX);
+            // Update useful counters
+            if(last_training_data.provider_prediction == branch_taken && last_training_data.alt_prediction != branch_taken) {
+                update_counter(t.useful_counter, true, U_COUNTER_MAX);
+            }else if(last_training_data.provider_prediction != branch_taken && last_training_data.alt_prediction == branch_taken) {
+                update_counter(t.useful_counter, false, U_COUNTER_MAX);
+            }
+            pred->set_entry(index, t);
         }
 
         // TODO - Add reset here
@@ -260,6 +297,8 @@ namespace gold_standard {
         // DODGY - meant to be done each cycle
         feedback_shift_register.next();
         
+        count++;
+        fflush(file);
         return;
     }
 
@@ -292,12 +331,16 @@ namespace gold_standard {
     }
 
     std::pair<uint32_t, uint32_t> get_bimodal_index(uint64_t pc){
+        
+        uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5);
+        
         uint64_t mask1 = (1 << BIMODAL_PREDICTION_BITS) - 1;
-        uint64_t mask2 = (1 << BIMODAL_HYSTERESIS_BITS) - 1;
+        uint64_t mask2 = ((1 << BIMODAL_HYSTERESIS_BITS) - 1);
 
-        uint32_t prediction_index = mask1 & (pc>>2);
-        uint32_t hysteresis_index = mask2 & (pc>>2);
+        uint32_t prediction_index = mask1 & combined;
+        uint32_t hysteresis_index = mask2 & (combined >> (BIMODAL_PREDICTION_BITS - BIMODAL_HYSTERESIS_BITS));
         //printf("Indices %d %d\n",prediction_index, hysteresis_index);
+        //printf("GOLD STANDARD %d %d\n", prediction_index, hysteresis_index);
         return {prediction_index, hysteresis_index};
     }
 
@@ -353,15 +396,16 @@ namespace gold_standard {
     template<const table_parameters& params>
     void tagged_table<params>::update_history(std::bitset<GLOBAL_SIZE>& global, std::bitset<PATH_HISTORY_SIZE>& path) {
             // Global history
-            bool last_bit = folded_history.test(params.index_size-1);
+            uint64_t size = params.index_size + params.tag_size;
+            bool last_bit = folded_history.test(size-1);
             folded_history <<= 1;
             folded_history.set(0, global.test(0) ^ last_bit);
             
-            uint8_t i = params.history_length % params.index_size;
+            uint8_t i = params.history_length % size;
             folded_history.set(i, global.test(params.history_length) ^ folded_history.test(i));
 
             // Path history, could probably just merge this with the global history actually but path history must be 16 bits
-            last_bit = folded_path_history.test(params.index_size-1);
+            /*last_bit = folded_path_history.test(params.index_size-1);
             folded_path_history <<= 1;
             i = PATH_HISTORY_SIZE % params.index_size;
             folded_path_history.set(0, last_bit ^ path.test(0));
@@ -372,21 +416,26 @@ namespace gold_standard {
             folded_tag <<= 1;
             folded_tag.set(0, global.test(0) ^ last_bit);
             i = (params.history_length-3) % params.tag_size;
-            folded_tag.set(i, global.test(params.history_length-3) ^ folded_tag.test(i));
+            folded_tag.set(i, global.test(params.history_length-3) ^ folded_tag.test(i));*/
     }
 
     template<const table_parameters& params>
     int tagged_table<params>::get_index(uint64_t pc){
+        
+        //uint64_t folded_pc = (pc & mask) ^ ((pc >> (params.index_size)) & mask);
+        //uint64_t index = folded_history.to_ulong() ^ folded_path_history.to_ulong() ^ folded_pc;
+        uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5) ^ folded_history.to_ulong();
         uint64_t mask = (uint64_t(1) << params.index_size)-1;
-        uint64_t folded_pc = (pc & mask) ^ ((pc >> (params.index_size)) & mask);
-        uint64_t index = folded_history.to_ulong() ^ folded_path_history.to_ulong() ^ folded_pc;
-        return index;
+    
+        return combined & mask;
     }
 
     template<const table_parameters& params>
     uint16_t tagged_table<params>::compute_tag(uint64_t pc){
-        uint64_t mask = ( uint64_t(1) << params.tag_size)-1;
-        uint16_t tag = (pc & mask) ^ (pc >> (5 + params.tag_size) & mask) ^ folded_tag.to_ulong();
+        //uint16_t tag = (pc & mask) ^ (pc >> (5 + params.tag_size) & mask) ^ folded_tag.to_ulong();
+        uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5) ^ folded_history.to_ulong();
+        uint64_t mask = ((uint64_t(1) << params.tag_size)-1);
+        uint16_t tag = (combined >> params.index_size) & mask;
         return tag;
     }
 

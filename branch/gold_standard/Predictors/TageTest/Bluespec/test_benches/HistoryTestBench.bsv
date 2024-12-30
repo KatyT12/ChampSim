@@ -58,8 +58,8 @@ module mkHistoryTestBench(Empty);
                     
             
                     if(count % 33 == 0) begin
-                        let rec <-  fh.recoverFrom[0].undo;
-                        let recGlobal <-  gb.recoverFrom[0].undo;
+                        let rec <-  fh.recoverFrom[0].debugUndo;
+                        let recGlobal <-  gb.recoverFrom[0].debugUndo;
                         $display("Rec %b\n", recGlobal);   
                         dynamicAssert(last_global_1 == recGlobal, "Global failure");
                         
@@ -106,8 +106,8 @@ module mkHistoryTestBench(Empty);
             Bit#(10) prevState = reverseBits(historyToForm << rec);
             Bit#(10) newState = {truncateLSB(prevState << 1), 1'b1};
 
-            let a <- gb.recoverFrom[rec-1].undo;
-            let b <- fh.recoverFrom[rec-1].undo;
+            let a <- gb.recoverFrom[rec-1].debugUndo;
+            let b <- fh.recoverFrom[rec-1].debugUndo;
             gb.updateRecoveredHistory(1'b1);
             fh.updateRecoveredHistory(gb, 1'b1);
 
