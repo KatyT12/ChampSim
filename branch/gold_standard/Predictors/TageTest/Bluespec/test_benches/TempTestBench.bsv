@@ -127,7 +127,7 @@ module mkTempTestBench(Empty);
         action
           let entry = tage.debugGetEntry(1293, 4); 
           $display(fshow(entry));
-          dynamicAssert((entry.predictionCounter == 4 && entry.usefulCounter == 0 && entry.tag == 0), "Tagged tables need to be initialised to 0, prediction counter initialised to weakly taken (4)");
+          dynamicAssert((entry.predictionCounter == 0 && entry.usefulCounter == 0 && entry.tag == 0), "Tagged tables need to be initialised to 0");
         endaction
 
         tage.dirPredInterface.nextPc(4010103);

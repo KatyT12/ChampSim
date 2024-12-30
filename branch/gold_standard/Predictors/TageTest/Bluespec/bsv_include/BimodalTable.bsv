@@ -37,13 +37,13 @@ interface BimodalTable#(numeric type predIndexSize, numeric type hystIndexSize);
     `endif
 endinterface
 
-module mkBimodalTable(BimodalTable#(predIndexSize, hystIndexSize)) provisos(
+module mkBimodalTable#(String predInitFile, String hystInitFile)(BimodalTable#(predIndexSize, hystIndexSize)) provisos(
     Add#(hystIndexSize, c_, predIndexSize),
     Add#(predIndexSize, a_, 64),
     Add#(hystIndexSize, b_, 64)
     );
-    RegFile#(Bit#(predIndexSize), BimodalPredictionEntry) predTable <- mkRegFileWCFLoad(regInitFilename, 0, maxBound);
-    RegFile#(Bit#(hystIndexSize), BimodalHysteresisEntry) hystTable <- mkRegFileWCFLoad(regInitFilename, 0, maxBound);
+    RegFile#(Bit#(predIndexSize), BimodalPredictionEntry) predTable <- mkRegFileWCFLoad(predInitFile, 0, maxBound);
+    RegFile#(Bit#(hystIndexSize), BimodalHysteresisEntry) hystTable <- mkRegFileWCFLoad(hystInitFile, 0, maxBound);
 
     
     function BimodalInd#(predIndexSize, hystIndexSize) pcToIndex(Addr pc);

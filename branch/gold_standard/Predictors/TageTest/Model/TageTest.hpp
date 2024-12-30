@@ -92,7 +92,7 @@ namespace gold_standard {
         path_history.reset();
         
         // Set to weakly taken
-        bimodal_prediction_bits.fill(0);
+        bimodal_prediction_bits.fill(~(uint64_t)0);
         bimodal_hysteresis_bits.fill(0);
 
         alt_on_na = ALT_ON_NA_THRESHOLD;   

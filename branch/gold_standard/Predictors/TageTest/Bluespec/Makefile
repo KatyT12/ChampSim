@@ -39,7 +39,7 @@ all_bsim: full_clean build_bsim generate_mem_files compile  link simulate
 
 
 MEM_BASE_NAME = regfileMemInit
-MEM_FILE_SIZES = 512:4 8192:0
+MEM_FILE_SIZES = 512:0 8192:1 2048:0
 
 generate_mem_files:
 	@for pair in $(MEM_FILE_SIZES); do \

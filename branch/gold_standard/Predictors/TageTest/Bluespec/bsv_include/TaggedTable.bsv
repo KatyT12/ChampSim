@@ -19,28 +19,13 @@ typedef struct {
     PredCtr predictionCounter;
     UsefulCtr usefulCounter;
     Bit#(tagSize) tag;
-} TaggedTableEntry#(numeric type tagSize) deriving(Eq, FShow);
+} TaggedTableEntry#(numeric type tagSize) deriving(Bits, Eq, FShow);
 
 typedef enum {
     INCREMENT,
     PRESERVE,
     DECREMENT
 } UsefulCtrUpdate deriving (Bits, Eq, FShow);
-
-instance Bits#(TaggedTableEntry#(tagSize), TAdd#(tagSize, TAdd#(PredCtrSz, UsefulCtrSz)));   
-    function Bit#(TAdd#(tagSize, TAdd#(PredCtrSz, UsefulCtrSz))) pack(TaggedTableEntry#(tagSize) s);
-        return {pack(s.tag), pack(s.usefulCounter), pack(s.predictionCounter)};
-    endfunction
-
-    
-    function TaggedTableEntry#(tagSize) unpack(Bit#(TAdd#(tagSize, TAdd#(PredCtrSz, UsefulCtrSz))) b);
-        let predCounter = unpack(b[valueOf(PredCtrSz)-1:0]);
-        let usefulCounter = unpack(b[valueOf(TAdd#(UsefulCtrSz, PredCtrSz))-1:valueOf(PredCtrSz)]);
-        let tag = unpack(b[valueOf(TAdd#(tagSize,TAdd#(UsefulCtrSz, PredCtrSz)))-1:valueOf(TAdd#(UsefulCtrSz, PredCtrSz))]);
-        
-        return TaggedTableEntry{ tag: tag, predictionCounter: predCounter, usefulCounter: usefulCounter };
-    endfunction
-endinstance
 
 function Bool takenFromCounter(PredCtr ctr);
     return unpack(pack(ctr)[valueOf(TSub#(PredCtrSz,1))]);
@@ -60,7 +45,7 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
     method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
-    method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(MaxSpecSize) numRecovery);
+    method ActionValue#(Bit#(TAdd#(tagSize, indexSize))) recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery);
     
 
     method Action updateEntry(Bit#(`MAX_INDEX_SIZE) index, Bit#(`MAX_TAGGED) tag, Bool taken, UsefulCtrUpdate usefulUpdate);
@@ -129,7 +114,7 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
 
     method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateHistory(global, taken);
     method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateRecoveredHistory(global, taken);
-    method ActionValue#(Bit#(foldedSize)) recoverHistory(Bit#(MaxSpecSize) numRecovery) = folded.recoverFrom[numRecovery].undo;
+    method ActionValue#(Bit#(foldedSize)) recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery) = folded.recoverFrom[numRecovery].undo;
 
   
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc, Bool recovered); // To be used in training

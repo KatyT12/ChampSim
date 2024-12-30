@@ -10,7 +10,7 @@ namespace gold_standard {
 
     #define GLOBAL_SIZE 256
     #define PATH_HISTORY_SIZE 16
-    #define TAGE_PRED_CTR_INIT 4
+    #define TAGE_PRED_CTR_INIT 0
 
     
 

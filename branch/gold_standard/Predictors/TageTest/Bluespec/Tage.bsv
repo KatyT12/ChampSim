@@ -137,11 +137,11 @@ module mkTage(Tage#(numTables)) provisos(
     TaggedTable#(9,12,130)  t7 <- mkTaggedTable;
 
     
-    BimodalTable#(13, 11) bimodalTable <- mkBimodalTable;
+    BimodalTable#(13, 11) bimodalTable <- mkBimodalTable(regInitFilenameBimodalPred, regInitFilenameBimodalHyst);
     Vector#(7, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(t1), cons(T_9_9_9(t2), cons(T_9_10_15(t3), cons(T_9_10_25(t4), cons(T_9_11_44(t5), cons(T_9_11_76(t6), cons(T_9_12_130(t7), nil)))))));
     Reg#(Addr) currentPc <- mkRegU;
     Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
-    
+    Reg#(Bit#(TLog#(MaxSpecSize))) numSpecInFlight <- mkReg(0);
     // For the LFSR
     LFSR#(Bit#(4)) lfsr <- mkLFSR_4;
     Reg#(Bool) starting <- mkReg(True);
@@ -246,11 +246,14 @@ module mkTage(Tage#(numTables)) provisos(
         
         // Recover histories first
         //WARNING MUST REMOVE THIS REDUNDANCY
-        let a <- global.recoverFrom[0].undo;
+        
+        
+        let recoverNumber = numSpecInFlight-1;
+        let a <- global.recoverFrom[recoverNumber].undo;
         for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
             let tab = taggedTablesVector[i];
             /* WARNING THIS MUST BE CHANGED LATER - NEED A MECHANISM FOR THE NUMBER OF BRANCHES*/
-            `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(0); /*))
+            `CASE_ALL_TABLES(tab, (*/ let b <- t.recoverHistory(recoverNumber); /*))
         end
 
         if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
@@ -402,6 +405,7 @@ module mkTage(Tage#(numTables)) provisos(
                 `CASE_ALL_TABLES(tab, (*/ t.updateHistory(global, pack(ret.taken)); /*))
             end
 
+            numSpecInFlight <= numSpecInFlight + 1;
            
             // Also update histories
             return DirPredResult {
@@ -499,7 +503,12 @@ module mkTage(Tage#(numTables)) provisos(
                     let tab = taggedTablesVector[i];
                     `CASE_ALL_TABLES(tab, (*/ t.updateRecovered(global, pack(taken)); /*))
                 end
+                numSpecInFlight <= 0; // Assuming pipeline is flushed!
             end
+            else
+                numSpecInFlight <= numSpecInFlight - 1; // Assuming in order
+            
+
 
             // Update LSFR
             `ifndef OFF_GOLD_STANDARD

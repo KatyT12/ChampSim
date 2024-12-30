@@ -44,7 +44,6 @@ void O3_CPU::last_branch_result(uint64_t ip, uint64_t branch_target, uint8_t tak
     // Bascially does nothing 
     if(branch_type == BRANCH_CONDITIONAL){
       //printf("UPDATE %d\n", prediction_count);
-      sleep(0.01);
       bluespec_predictor.last_branch_result(ip, branch_target, taken, branch_type);
       #ifndef MODEL_OFF
       model_predictor.last_branch_result(ip, branch_target, taken, branch_type);
