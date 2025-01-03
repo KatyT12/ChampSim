@@ -9,6 +9,7 @@ import BranchParams::*;
 import BimodalTable::*;
 import TaggedTable::*;
 import GlobalBranchHistory::*;
+import Ehr::*;
 import Util::*;
 /*
 export DirPredTrainInfo(..);
@@ -128,13 +129,15 @@ module mkTage(Tage#(numTables)) provisos(
     Add#(1, b__, TLog#(TAdd#(1, numTables))),
     Add#(c__, numTables, 20)
 );
-    TaggedTable#(9,9,5)     t1 <- mkTaggedTable;
-    TaggedTable#(9,9,9)     t2 <- mkTaggedTable;
-    TaggedTable#(9,10,15)   t3 <- mkTaggedTable;
-    TaggedTable#(9,10,25)   t4 <- mkTaggedTable;
-    TaggedTable#(9,11,44)   t5 <- mkTaggedTable;
-    TaggedTable#(9,11,76)   t6 <- mkTaggedTable;
-    TaggedTable#(9,12,130)  t7 <- mkTaggedTable;
+    GlobalBranchHistory#(GlobalHistoryLength) global <- mkGlobalBranchHistory;
+
+    TaggedTable#(9,9,5)     t1 <- mkTaggedTable(global);
+    TaggedTable#(9,9,9)     t2 <- mkTaggedTable(global);
+    TaggedTable#(9,10,15)   t3 <- mkTaggedTable(global);
+    TaggedTable#(9,10,25)   t4 <- mkTaggedTable(global);
+    TaggedTable#(9,11,44)   t5 <- mkTaggedTable(global);
+    TaggedTable#(9,11,76)   t6 <- mkTaggedTable(global);
+    TaggedTable#(9,12,130)  t7 <- mkTaggedTable(global);
 
     
     BimodalTable#(13, 11) bimodalTable <- mkBimodalTable(regInitFilenameBimodalPred, regInitFilenameBimodalHyst);
@@ -142,15 +145,23 @@ module mkTage(Tage#(numTables)) provisos(
     Reg#(Addr) currentPc <- mkRegU;
     Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
     Reg#(Bit#(TLog#(MaxSpecSize))) numSpecInFlight <- mkReg(0);
+
+    PulseWire mispredictWire <- mkPulseWire;
+    PulseWire updateThisCycleWire <- mkPulseWire;
+    
+    Ehr#(TAdd#(1, SupSize), SupCnt) numPred <- mkEhr(0);
+    Ehr#(TAdd#(1, SupSize), Bit#(SupSize)) predResults <- mkEhr(0);
+
     // For the LFSR
     LFSR#(Bit#(4)) lfsr <- mkLFSR_4;
     Reg#(Bool) starting <- mkReg(True);
 
     Vector#(SupSize, DirPred#(TageTrainInfo#(numTables))) predIfc;
-    GlobalBranchHistory#(GlobalHistoryLength) global <- mkGlobalBranchHistory;
+    
 
     (* no_implicit_conditions, fire_when_enabled*)
-    rule updateLSFR;
+    rule canonUpdate;   
+        //Update LFSR
         if(starting) begin
             lfsr.seed('d9);
             starting <= False;
@@ -159,6 +170,31 @@ module mkTage(Tage#(numTables)) provisos(
         else
             lfsr.next;
         `endif
+
+        numPred[valueOf(SupSize)] <= 0;
+        predResults[valueOf(SupSize)] <= 0;
+    endrule
+
+    (* no_implicit_conditions*)
+    rule updateHistory(!mispredictWire);
+        let numSpec = numSpecInFlight + numPred[valueOf(SupSize)];
+        
+        if(updateThisCycleWire) begin
+            numSpec = numSpec-1;
+        end
+        numSpecInFlight <= numSpec;
+        
+        // Update history speculatively
+        let num = numPred[valueOf(SupSize)];
+        let results = predResults[valueOf(SupSize)];
+
+        if(num != 0) begin
+            global.addHistoryBits(results, num);
+            for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
+                let tab = taggedTablesVector[i];
+                `CASE_ALL_TABLES(tab, (*/ t.updateHistory(results, num); /*))
+            end
+        end
     endrule
 
     function Bool useAlt;
@@ -196,21 +232,23 @@ module mkTage(Tage#(numTables)) provisos(
         end
     endfunction
 
-    function Tuple2#(PredictionTableInfo#(numTables), Bit#(numTables)) find_pred_altpred;
+    function Tuple2#(PredictionTableInfo#(numTables), Bit#(numTables)) find_pred_altpred(Addr pc);
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) entries_compare = replicate(tagged Invalid);
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred_compare = replicate(tagged Invalid);
         Bit#(numTables) replaceableEntries = 0;
         
         Vector#(numTables,TaggedTableEntry#(`MAX_TAGGED)) entries = replicate(TaggedTableEntry{tag:0, predictionCounter:0, usefulCounter:0});
 
+        
         for(Integer i = 0; i < valueOf(numTables); i=i+1) begin
             ChosenTaggedTables tab = taggedTablesVector[i];    
             `CASE_ALL_TABLES(tab, 
             (*/
                 // Could do this in one
-                match {.tag, .index} = t.trainingInfo(currentPc, False);
-                let entry = t.access_wrapped_entry(currentPc);
+                match {.tag, .index} = t.trainingInfo(pc, False);
+                let entry = t.access_wrapped_entry(pc);
                 replaceableEntries[i] = pack(entry.usefulCounter == 0);
+                
                 
                 entries[i] = entry;
                 if (zeroExtend(tag) == entry.tag) begin
@@ -315,11 +353,12 @@ module mkTage(Tage#(numTables)) provisos(
         
         method ActionValue#(DirPredResult#(TageTrainInfo#(numTables))) pred;
             TageTrainInfo#(numTables) ret = unpack(0);
-            
+            Addr pc = offsetPc(currentPc, i);
+
             // Retrieve provider and alternative table
-            match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred;
+            match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred(pc);
             ret.replaceableEntries = replaceableEntries;
-            ret.pc = currentPc;
+            ret.pc = pc;
 
             if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
@@ -328,7 +367,7 @@ module mkTage(Tage#(numTables)) provisos(
                 // Get the index to avoid recomputing on update (not possible unless mispredict)
                 Bit#(`MAX_INDEX_SIZE) index = 0;
                 let tab = taggedTablesVector[pred_index];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(currentPc, False))); /*))
+                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(pc, False))); /*))
 
                 ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
                 if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
@@ -348,7 +387,7 @@ module mkTage(Tage#(numTables)) provisos(
                 end
                 else begin
                     ret.alt_table = tagged Invalid;
-                    Bool bimodal_prediction = unpack(pack(bimodalTable.accessPrediction(currentPc)));
+                    Bool bimodal_prediction = unpack(pack(bimodalTable.accessPrediction(pc)));
                     ret.alt_prediction = bimodal_prediction;
                     ret.use_alt = False;
                     ret.taken = prediction;
@@ -359,20 +398,16 @@ module mkTage(Tage#(numTables)) provisos(
                 ret.provider_info = tagged Invalid;
                 ret.use_alt = False;
                 // Maybe automatically trigger a read from bimodal table ever time nextPc is set?
-                Bool prediction = unpack(pack(bimodalTable.accessPrediction(currentPc)));
+                Bool prediction = unpack(pack(bimodalTable.accessPrediction(pc)));
                 ret.provider_prediction = prediction;
                 ret.taken = prediction;
             end
 
-            // Update history speculatively
-            global.addHistory(pack(ret.taken));
-            for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
-                let tab = taggedTablesVector[i];
-                `CASE_ALL_TABLES(tab, (*/ t.updateHistory(global, pack(ret.taken)); /*))
-            end
+            // Update counters and results
+            // Forces predictions in order.
+            numPred[i] <= numPred[i] + 1;
+            predResults[i] <= predResults[i] | (zeroExtend(pack(ret.taken)) << numPred[i]);
 
-            numSpecInFlight <= numSpecInFlight + 1;
-           
             // Also update histories
             return DirPredResult {
                 taken: ret.taken,
@@ -392,7 +427,7 @@ module mkTage(Tage#(numTables)) provisos(
 
 
     method PredictionTableInfo#(numTables) debugPredAltpred;
-        return tpl_1(find_pred_altpred);
+        return tpl_1(find_pred_altpred(currentPc));
     endmethod
 
     method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
@@ -422,6 +457,8 @@ module mkTage(Tage#(numTables)) provisos(
             // Update bimodal table either way
             bimodalTable.updateEntry(train.pc, taken);
             Bool mispredict = taken != train.taken;
+
+            updateThisCycleWire.send;
             
             // Allocate on misprediction
             if (mispredict) begin
@@ -449,18 +486,17 @@ module mkTage(Tage#(numTables)) provisos(
             end
 
             // Update histories.
-            if(mispredict) begin
+            (*split*)
+            if(mispredict) (*nosplit*) begin
+                mispredictWire.send;
                 global.updateRecoveredHistory(pack(taken));
+                numSpecInFlight <= 0; // Assuming pipeline is flushed!
                 for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
                     let tab = taggedTablesVector[i];
-                    `CASE_ALL_TABLES(tab, (*/ t.updateRecovered(global, pack(taken)); /*))
+                    `CASE_ALL_TABLES(tab, (*/ t.updateRecovered(pack(taken)); /*))
                 end
-                numSpecInFlight <= 0; // Assuming pipeline is flushed!
             end
-            else
-                numSpecInFlight <= numSpecInFlight - 1; // Assuming in order
-            
-
+            (*nosplit*)
 
             // Update LSFR
             `ifndef OFF_GOLD_STANDARD
