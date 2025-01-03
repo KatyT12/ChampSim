@@ -75,7 +75,7 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
     endrule
 
     // Recovery
-    function ActionValue#(Bit#(length)) undoHistory(Bit#(TLog#(MaxSpecSize)) i);
+    function ActionValue#(Bit#(length)) undoHistory(Bit#(TLog#(MaxSpecSize)) i, Bit#(TLog#(length)) shiftNum);
         actionvalue
             recover.send;
             UInt#(TLog#(MaxSpecSize)) recoverIndex = unpack(i); 
@@ -91,7 +91,7 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
             end
             
             Bit#(length) removed = recovered[recoverIndex:0] ^ last_spec_outcomes[recoverIndex:0];
-            recovered = (removed[recoverIndex:0] << (valueOf(length)-1)) >> i | truncateLSB(recovered >> (i+1));
+            recovered = (removed[recoverIndex:0] << shiftNum) | truncateLSB(recovered >> (i+1));
             folded_history[0] <= recovered;
             return recovered;
         endactionvalue
@@ -100,12 +100,12 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
     for(Integer i = 0; i < valueOf(MaxSpecSize); i = i+1) begin
         recoverIfc[i] = (interface RecoverMechanism#(length);
             method Action undo;
-                let a <- undoHistory(fromInteger(i));
+                let a <- undoHistory(fromInteger(i), fromInteger(valueOf(length)-1-i));
             endmethod
 
             `ifdef DEBUG
             method ActionValue#(Bit#(length)) debugUndo;
-                let ret <- undoHistory(fromInteger(i));
+                let ret <- undoHistory(fromInteger(i), fromInteger(valueOf(length)-1-i));
                 return ret;
             endmethod
             `endif
