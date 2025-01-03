@@ -1,8 +1,11 @@
 import GlobalBranchHistory::*;
 import BranchParams::*;
+import BrPred::*;
+
 import Vector::*;
 import ConfigReg::*; // Need to use this because of run rule reading the history
 import Ehr::*;
+
 
 
 // Assuming out of order updates, would actually be simpler with in order updates as I could keep a pointer
@@ -22,8 +25,8 @@ Multiple recovery updates to history? hopefully not possible but may need EHRs
 interface FoldedHistory#(numeric type length);
     method Bit#(length) history;
     method Bit#(length) recoveredHistory;
-    method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) newHistory);
-    method Action updateRecoveredHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
+    method Action updateHistory(Bit#(SupSize) taken, SupCnt count);
+    method Action updateRecoveredHistory(Bit#(1) taken);
     interface Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverFrom;
     `ifdef DEBUG
     method Action debugInitialise(Bit#(length) newHistory);
@@ -31,7 +34,7 @@ interface FoldedHistory#(numeric type length);
 endinterface
 
 
-module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
+module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLength) global)(FoldedHistory#(length));
     Ehr#(2, Bit#(length)) folded_history <- mkEhr(0);
     
     // For out of order recovery of branch history
@@ -41,37 +44,41 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
     PulseWire recover <- mkPulseWire;
 
     RWire#(Tuple2#(Bit#(1), Bit#(1))) historyRecoveredUpdateData <- mkRWire;
-    RWire#(Tuple2#(Bit#(1), Bit#(1))) historyUpdateData <- mkRWire;
+    RWire#(Tuple3#(Bit#(SupSize), Bit#(SupSize), SupCnt)) historyUpdateData <- mkRWire;
 
     Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverIfc;
 
-    function Action updateWith(Bit#(1) eliminateBit, Bit#(1) newHistory);
+    function Action updateWith(Bit#(SupSize) eliminateBits, Bit#(SupSize) newHistory, SupCnt count);
         action
             let folded = folded_history[1];
-            Bit#(1) new_bit = newHistory ^ folded[valueOf(length)-1];
-            Bit#(length) new_folded_history = truncateLSB({folded, new_bit} << 1);
+            let newHist = reverseBits(newHistory);
+            Bit#(SupSize) new_bits = newHist ^ folded[valueOf(length)-1: valueOf(length)-valueOf(SupSize)];
+            Bit#(length) new_folded_history = truncateLSB({folded, new_bits} << count);
 
-            // Eliminate history out of bounds
-            Integer i = histLength % valueOf(length);
-            new_folded_history[i] = new_folded_history[i] ^ eliminateBit;
-            
+            for(Integer j = 0; j < valueOf(SupSize); j = j + 1) begin
+                // Eliminate history out of bounds
+                if(fromInteger(j) < count) begin
+                    Integer i = (histLength - j) % valueOf(length);
+                    new_folded_history[i] = new_folded_history[i] ^ reverseBits(eliminateBits)[j];
+                end
+            end
             folded_history[1] <= new_folded_history;
 
-            // For recovery updates
-            last_spec_outcomes <= truncateLSB({last_spec_outcomes, newHistory} << 1);
-            last_removed_history <= truncateLSB({last_removed_history, eliminateBit} << 1);
+            // For recovery updates 0001, 1000
+            last_spec_outcomes <= truncateLSB({last_spec_outcomes, newHist} << count);
+            last_removed_history <= truncateLSB({last_removed_history, eliminateBits} << count);
         endaction
     endfunction
 
     // Normal update
     (* no_implicit_conditions, fire_when_enabled *)
-    rule updateHist(!recover &&& historyUpdateData.wget matches tagged Valid {.eliminateBit, .newHistory});
-        updateWith(eliminateBit, newHistory);
+    rule updateHist(!recover &&& historyUpdateData.wget matches tagged Valid {.eliminateBits, .newHistory, .count});
+        updateWith(eliminateBits, newHistory, count);
     endrule
 
     (* no_implicit_conditions, fire_when_enabled *)
     rule updateHistRecovered(recover &&& historyRecoveredUpdateData.wget matches tagged Valid {.eliminateBit, .newHistory});
-        updateWith(eliminateBit, newHistory);
+        updateWith({eliminateBit,0}, zeroExtend(newHistory), 1);
     endrule
 
     // Recovery
@@ -122,14 +129,14 @@ module mkFoldedHistory#(Integer histLength)(FoldedHistory#(length));
     // If in order then fetch stage will know which branch because we can keep a pointer
     // But that also requires sending back correct updates to the global history
 
-    method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) newHistory);
+    method Action updateHistory(Bit#(SupSize) newHistory, SupCnt count);
         // Shift and add new history bit, with older history
         Integer i = histLength % valueOf(length);
-        Bit#(1) eliminateBit = global.history[histLength-1];
-        historyUpdateData.wset(tuple2(eliminateBit, newHistory));
+        Bit#(SupSize) eliminateBits = global.history[histLength-1 : histLength-valueOf(SupSize)];
+        historyUpdateData.wset(tuple3(eliminateBits, newHistory, count));
     endmethod
 
-    method Action updateRecoveredHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
+    method Action updateRecoveredHistory(Bit#(1) taken);
         Integer i = histLength % valueOf(length);
         Bit#(1) eliminateBit = global.recoveredHistory[histLength-1];
         historyRecoveredUpdateData.wset(tuple2(eliminateBit, taken));

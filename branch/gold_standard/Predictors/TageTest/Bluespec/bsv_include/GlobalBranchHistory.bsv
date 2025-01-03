@@ -1,5 +1,6 @@
 // Simple global history
 // No speculative recovery or anything
+import BrPred::*;
 import BranchParams::*;
 import Vector::*;
 import ConfigReg::*;
@@ -15,7 +16,7 @@ endinterface
 interface GlobalBranchHistory#(numeric type length);
     method Bit#(length) history;
     method Bit#(length) recoveredHistory;
-    method Action addHistory(Bit#(1) taken);
+    method Action addHistoryBits(Bit#(SupSize) taken, SupCnt count);
     method Action updateRecoveredHistory(Bit#(1) taken);
     interface Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverFrom;
     `ifdef DEBUG
@@ -28,15 +29,16 @@ module mkGlobalBranchHistory(GlobalBranchHistory#(length));
     Reg#(Bit#(MaxSpecSize)) last_removed_history <- mkReg(0);
     
     PulseWire recover <- mkPulseWire;
-    RWire#(Bit#(1)) updateHistoryData <- mkRWire;
+    RWire#(Tuple2#(Bit#(SupSize), SupCnt)) updateHistoryData <- mkRWire;
     RWire#(Bit#(1)) updateRecoveredHistoryData <- mkRWire;
 
     Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverIfc;
 
     (* no_implicit_conditions, fire_when_enabled *)
-    rule updateHist(updateHistoryData.wget matches tagged Valid .taken &&& !recover);
-        shift_register[1] <= truncateLSB({shift_register[0], taken} << 1);
-        last_removed_history <= truncateLSB({last_removed_history, shift_register[0][valueOf(length)-1]} << 1);
+    rule updateHist(updateHistoryData.wget matches tagged Valid {.results, .count} &&& !recover);
+        shift_register[1] <= truncateLSB({shift_register[0], reverseBits(results)} << count);
+        Bit#(SupSize) bits = shift_register[0][valueOf(length)-1: valueOf(length)-valueOf(SupSize)];
+        last_removed_history <= truncateLSB({last_removed_history, bits} << count);
     endrule
 
     (* no_implicit_conditions, fire_when_enabled *)
@@ -71,8 +73,8 @@ module mkGlobalBranchHistory(GlobalBranchHistory#(length));
     end
     interface recoverFrom = recoverIfc;
 
-    method Action addHistory(Bit#(1) taken);
-        updateHistoryData.wset(taken);
+    method Action addHistoryBits(Bit#(SupSize) taken, SupCnt count);
+        updateHistoryData.wset(tuple2(taken, count));
         //update.send;
     endmethod
 

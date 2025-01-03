@@ -43,8 +43,8 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
     method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc, Bool recovered); // To be used in training
 
-    method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
-    method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken);
+    method Action updateHistory(Bit#(SupSize) results, SupCnt count);
+    method Action updateRecovered(Bit#(1) taken);
     method Action recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery);
     
 
@@ -65,7 +65,7 @@ endinterface
 
 
 
-module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
+module mkTaggedTable#(GlobalBranchHistory#(GlobalHistoryLength) global) (TaggedTable#(indexSize, tagSize, historyLength)) provisos(
     Add#(a__, indexSize, 64), 
     Add#(b__, tagSize, 64), 
     Add#(indexSize, tagSize, foldedSize),
@@ -73,7 +73,7 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
     Add#(d__, tagSize, `MAX_TAGGED),
     Add#(c__, indexSize, `MAX_INDEX_SIZE));
     
-    FoldedHistory#(TAdd#(tagSize, indexSize)) folded <- mkFoldedHistory(valueOf(historyLength));
+    FoldedHistory#(TAdd#(tagSize, indexSize)) folded <- mkFoldedHistory(valueOf(historyLength), global);
     RegFile#(Bit#(indexSize), TaggedTableEntry#(tagSize)) tab <- mkRegFileWCFLoad(regInitTaggedTableFilename, 0, maxBound);
 
     function Tuple2#(Bit#(tagSize), Bit#(indexSize)) getHistory(Bool recovered, Addr pc);
@@ -112,8 +112,8 @@ module mkTaggedTable(TaggedTable#(indexSize, tagSize, historyLength)) provisos(
 
 
 
-    method Action updateHistory(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateHistory(global, taken);
-    method Action updateRecovered(GlobalBranchHistory#(GlobalHistoryLength) global, Bit#(1) taken) = folded.updateRecoveredHistory(global, taken);
+    method Action updateHistory(Bit#(SupSize) results, SupCnt count) = folded.updateHistory(results, count);
+    method Action updateRecovered(Bit#(1) taken) = folded.updateRecoveredHistory(taken);
     method Action recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery) = folded.recoverFrom[numRecovery].undo;
 
   
