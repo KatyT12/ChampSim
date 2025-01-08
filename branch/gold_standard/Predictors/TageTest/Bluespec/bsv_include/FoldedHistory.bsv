@@ -27,6 +27,8 @@ interface FoldedHistory#(numeric type length);
     method Bit#(length) recoveredHistory;
     method Action updateHistory(Bit#(SupSize) taken, SupCnt count);
     method Action updateRecoveredHistory(Bit#(1) taken);
+
+    method Bit#(length) historyOneBefore;
     interface Vector#(MaxSpecSize, RecoverMechanism#(length)) recoverFrom;
     `ifdef DEBUG
     method Action debugInitialise(Bit#(length) newHistory);
@@ -82,27 +84,34 @@ module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLe
     endrule
 
     // Recovery
+    function Bit#(length) getUndidHistory(Bit#(TLog#(MaxSpecSize)) i, Bit#(TLog#(length)) shiftNum);
+        UInt#(TLog#(MaxSpecSize)) recoverIndex = unpack(i); 
+        // Restore deleted historu
+        Bit#(length) recovered = folded_history[0];
+        Integer j = histLength % valueOf(length);
+        for(Integer k = 0; k < valueOf(MaxSpecSize); k = k +1) begin                    
+            if(fromInteger(k) <= i) begin
+                Bit#(1) eliminateBit = last_removed_history[k];
+                Integer position = (j + k) % valueOf(length);
+                recovered[position] = eliminateBit^recovered[position];
+            end
+        end
+        
+        Bit#(length) removed = recovered[recoverIndex:0] ^ last_spec_outcomes[recoverIndex:0];
+        recovered = (removed[recoverIndex:0] << shiftNum) | truncateLSB(recovered >> (i+1));
+        return recovered;
+    endfunction
+
     function ActionValue#(Bit#(length)) undoHistory(Bit#(TLog#(MaxSpecSize)) i, Bit#(TLog#(length)) shiftNum);
         actionvalue
             recover.send;
-            UInt#(TLog#(MaxSpecSize)) recoverIndex = unpack(i); 
-            // Restore deleted historu
-            Bit#(length) recovered = folded_history[0];
-            Integer j = histLength % valueOf(length);
-            for(Integer k = 0; k < valueOf(MaxSpecSize); k = k +1) begin                    
-                if(fromInteger(k) <= i) begin
-                    Bit#(1) eliminateBit = last_removed_history[k];
-                    Integer position = (j + k) % valueOf(length);
-                    recovered[position] = eliminateBit^recovered[position];
-                end
-            end
-            
-            Bit#(length) removed = recovered[recoverIndex:0] ^ last_spec_outcomes[recoverIndex:0];
-            recovered = (removed[recoverIndex:0] << shiftNum) | truncateLSB(recovered >> (i+1));
+            let recovered = getUndidHistory(i, shiftNum);
             folded_history[0] <= recovered;
             return recovered;
         endactionvalue
     endfunction
+
+    
 
     for(Integer i = 0; i < valueOf(MaxSpecSize); i = i+1) begin
         recoverIfc[i] = (interface RecoverMechanism#(length);
@@ -124,6 +133,8 @@ module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLe
     method Bit#(length) history = folded_history[0];
 
     method Bit#(length) recoveredHistory = folded_history[1];
+
+    method Bit#(length) historyOneBefore = getUndidHistory(0,fromInteger(valueOf(length)-1));
 
     // How to know the pointer? Realistically commit stage cannot know
     // If in order then fetch stage will know which branch because we can keep a pointer

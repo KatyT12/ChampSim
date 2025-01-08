@@ -18,7 +18,7 @@ module mkTableTestBench(Empty);
     Reg#(UInt#(10)) count <- mkReg(0);
 
     GlobalBranchHistory#(GlobalHistoryLength) gb <- mkGlobalBranchHistory;
-    TaggedTable#(5, 5, 10) tg <- mkTaggedTable;
+    TaggedTable#(5, 5, 10) tg <- mkTaggedTable(gb);
 
 
 
@@ -47,13 +47,13 @@ module mkTableTestBench(Empty);
 
                 
 
-                gb.addHistory(value);
+                gb.addHistoryBits(0, zeroExtend(value));
                 $display("Global history %b\n", gb.history);
-                tg.updateHistory(gb, value);
+                tg.updateHistory(0, zeroExtend(value));
 
                 let t = tg.access_entry(13);
                 $display("Normal: %d %d %d\n",t.tag, t.predictionCounter, t.usefulCounter);
-                match {.a1, .a2} = tg.trainingInfo(13, False);
+                match {.a1, .a2} = tg.trainingInfo(13, BEFORE_RECOVERY);
                 $display("Normal tag %d, index %d\n",a1, a2);
 
                 if(count % 20 == 0) begin
