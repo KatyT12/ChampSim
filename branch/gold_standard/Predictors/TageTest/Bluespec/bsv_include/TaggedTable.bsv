@@ -49,6 +49,9 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
     method TaggedTableEntry#(`MAX_TAGGED) access_wrapped_entry(Addr pc);
     method Tuple2#(Bit#(tagSize), Bit#(indexSize)) trainingInfo(Addr pc, HistoryRetrieve recovered); // To be used in training
 
+    // Wrapped
+    method Tuple2#(Bit#(`MAX_TAGGED), Bit#(`MAX_INDEX_SIZE)) trainingInfoWrapped(Addr pc, HistoryRetrieve recovered); // To be used in training
+
     method Action updateHistory(Bit#(SupSize) results, SupCnt count);
     method Action updateRecovered(Bit#(1) taken);
     method Action recoverHistory(Bit#(TLog#(MaxSpecSize)) numRecovery);
@@ -58,8 +61,7 @@ interface TaggedTable#(numeric type indexSize, numeric type tagSize, numeric typ
     
     // Only done on misprediction
     method Action decrementUsefulCounter(Addr pc);
-
-    method Action allocateEntry(Addr pc, Bool taken);
+    method Action allocateGivenEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool taken);
 
     /// Debug
     `ifdef DEBUG
@@ -133,6 +135,11 @@ module mkTaggedTable#(GlobalBranchHistory#(GlobalHistoryLength) global) (TaggedT
         return getHistory(recovered, pc);
     endmethod
 
+    method Tuple2#(Bit#(`MAX_TAGGED), Bit#(`MAX_INDEX_SIZE)) trainingInfoWrapped(Addr pc, HistoryRetrieve recovered);
+        match {.tag, .index}  = getHistory(recovered, pc);
+        return tuple2(zeroExtend(tag), zeroExtend(index));
+    endmethod
+
     method TaggedTableEntry#(tagSize) access_entry(Addr pc);
          // Shift necessary?
         //folded.history[valueOf(indexSize)-1:0] ^ truncate(pc >> 2);
@@ -174,24 +181,7 @@ module mkTaggedTable#(GlobalBranchHistory#(GlobalHistoryLength) global) (TaggedT
         tab.upd(index, entry);
     endmethod
 
-    // 3 bits 100 011
-    method Action allocateEntry(Addr pc,  Bool taken);
-        /*
-            Need to remove last history bit to get the correct index
-            Alternatively could drag the indices of every table in the training data.
-
-            If recovered in this cycle - can use getHistory(True), otherwise we need to remove a bit.
-        */        
-        HistoryRetrieve hr;
-        if(sameCycleRecovery) begin
-            hr = AFTER_RECOVERY;
-        end
-        else
-            hr = PREV_LAST_UPDATE;
-
-        match {.tag, .index} = getHistory(AFTER_RECOVERY, pc);
-        
-        // Weakly taken = 100 - 1, weakly not taken = 100 - 1
+    method Action allocateGivenEntry(Bit#(indexSize) index, Bit#(tagSize) tag, Bool taken);
         Bit#(PredCtrSz) counter_init = 1 << (valueOf(PredCtrSz)-1);
         if (!taken) begin
             counter_init = (1 << (valueOf(PredCtrSz)-1))-1;

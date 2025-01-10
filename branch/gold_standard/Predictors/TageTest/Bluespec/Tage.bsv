@@ -95,11 +95,16 @@ typedef struct {
     CircBuffIndex#(MaxSpecSize) ooIndex;
 } OOTageTrainInfo#(numeric type numTables) deriving(Bits, Eq, FShow);
 
+
+typedef Maybe#(Tuple3#(TableIndex#(numTables), Bit#(`MAX_INDEX_SIZE), Bit#(`MAX_TAGGED))) AllocateInfo#(numeric type numTables);
+
 typedef struct {
     TageTrainInfo#(numTables) tageInfo;
+    AllocateInfo#(numTables) allocateInfo; // This takes up loads of space!!
     Bool mispred;
     Bool taken;
 } UpdateInfo#(numeric type numTables) deriving(Bits, Eq, FShow);
+
 
 typedef OOTageTrainInfo DirPredTrainInfo;
 
@@ -158,11 +163,8 @@ module mkTage(Tage#(numTables)) provisos(
     Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
     CircBuff#(MaxSpecSize, UpdateInfo#(numTables)) ooBuff <- mkCircBuff;
 
-    RWire#(Tuple2#(Bit#(TLog#(MaxSpecSize)), Bit#(1))) historyUpdateBits <- mkRWire;
-
     PulseWire mispredictWire <- mkPulseWire;
-    PulseWire updateThisCycleWire <- mkPulseWire;
-    
+
     Ehr#(TAdd#(1, SupSize), SupCnt) numPred <- mkEhr(0);
     Ehr#(TAdd#(1, SupSize), Bit#(SupSize)) predResults <- mkEhr(0);
 
@@ -250,9 +252,9 @@ module mkTage(Tage#(numTables)) provisos(
 
 
     // WARNING - REMOVE ACTIONVALUE AFTER DEBUG
-    function ActionValue#(Maybe#(TableIndex#(numTables))) allocate(TageTrainInfo#(numTables) train, Bool taken);
+    function ActionValue#(AllocateInfo#(numTables)) getAllocatedIndexTag(TageTrainInfo#(numTables) train, Bool taken);
         actionvalue
-        Maybe#(TableIndex#(numTables)) ret = tagged Invalid;
+        AllocateInfo#(numTables) ret = tagged Invalid;
         
         if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
             `ifdef DEBUG
@@ -269,7 +271,8 @@ module mkTage(Tage#(numTables)) provisos(
 
             // Remove all entries before the starting table we are considering
             Bit#(numTables) tabsReplaceable = (train.replaceableEntries >> start) << start;
-            if(tabsReplaceable == 0) begin
+            
+            if(tabsReplaceable == 0)  begin
                 // Decrement all counters as in original TAGE, worried about the circuitry there
                 for(Integer i = 0; i < valueOf(numTables); i = i + 1) begin
                     if  (fromInteger(i) >= start) begin
@@ -304,30 +307,33 @@ module mkTage(Tage#(numTables)) provisos(
                     end
                 end
 
-                `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
-                ret = tagged Valid ind;
+                let tab = taggedTablesVector[ind];
+                
+                `CASE_ALL_TABLES(tab, (*/ match {.tag, .index} = t.trainingInfoWrapped(train.pc, AFTER_RECOVERY); 
+                ret = tagged Valid tuple3(ind, index, tag); 
+                /*))
+                
             end
         end
         return ret;
         endactionvalue
     endfunction
 
-    function Action updateWithTrain(Bool taken, TageTrainInfo#(numTables) train, Bool mispred);
+    function Action updateWithTrain(Bool taken, TageTrainInfo#(numTables) train, Bool mispred, AllocateInfo#(numTables) allocateInfo);
         action
         // Update bimodal table either way
         bimodalTable.updateEntry(train.pc, taken);
         Bool mispredict = taken != train.taken;
 
-        updateThisCycleWire.send;
-        
-        // Allocate on misprediction
-        if (mispredict) begin
-            let i <- allocate(train, taken);
-        end
-
         // Tagged tables update
         if(train.provider_info matches tagged Valid .info) begin
             let entry = info.provider_entry;
+
+
+            // Allocate on misprediction, last condition is so it compiles
+            if (mispred &&& allocateInfo matches tagged Valid {.tableNum, .index, .tag} &&& info.provider_table != tableNum) begin
+            `CASE_ALL_TABLES(taggedTablesVector[tableNum], (*/ t.allocateGivenEntry(truncate(index), truncate(tag), taken); /*))
+            end
             // Useful counters
             UsefulCtrUpdate u = PRESERVE;
             if(train.provider_prediction == taken && train.alt_prediction != taken)
@@ -353,8 +359,8 @@ module mkTage(Tage#(numTables)) provisos(
     endfunction
 
       
-    (* no_implicit_conditions*)
-    rule updateHistory(historyUpdateBits.wget matches tagged Invalid);
+    (* no_implicit_conditions, fire_when_enabled *)
+    rule updateHistory(!mispredictWire);
         // Update history speculatively
         let num = numPred[valueOf(SupSize)];
         let results = predResults[valueOf(SupSize)];
@@ -366,19 +372,6 @@ module mkTage(Tage#(numTables)) provisos(
                 `CASE_ALL_TABLES(tab, (*/ t.updateHistory(results, num); /*))
             end
         end
-    endrule
-
-    (* no_implicit_conditions, fire_when_enabled *)
-    rule recoverHistory(historyUpdateBits.wget matches tagged Valid {.updNum, .taken});
-        // Recover histories first, then update bit
-        let recoverNumber = updNum;
-        global.recoverFrom[recoverNumber].undo;
-        global.updateRecoveredHistory(pack(taken));
-        for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
-            let tab = taggedTablesVector[i];
-            /* It is untested if this will work for Toooba */
-            `CASE_ALL_TABLES(tab, (*/ t.recoverHistory(recoverNumber); t.updateRecovered(taken); /*))
-        end 
     endrule
 
     (* no_implicit_conditions, fire_when_enabled *)
@@ -401,9 +394,8 @@ module mkTage(Tage#(numTables)) provisos(
     rule scheduleUpdate(!starting);
         let updateThisCycle <- ooBuff.retrieveNext;
         (*split*)
-        if(updateThisCycle matches tagged Valid .trainInfo) begin
-            (*nosplit*)
-            updateWithTrain(trainInfo.taken, trainInfo.tageInfo, trainInfo.mispred);
+        if(updateThisCycle matches tagged Valid .train) (* nosplit *) begin
+            updateWithTrain(train.taken, train.tageInfo, train.mispred, train.allocateInfo);
         end
     endrule
 
@@ -495,7 +487,7 @@ module mkTage(Tage#(numTables)) provisos(
 
     method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         ChosenTaggedTables tab = taggedTablesVector[tableNum];
-        `CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, True); /*))
+        //`CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, True); /*))
     endmethod
 
     method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
@@ -504,7 +496,7 @@ module mkTage(Tage#(numTables)) provisos(
     endmethod
 
     method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
-        let ind <- allocate(train, taken);
+        let ind <- allocateGivenEntry(train, taken);
         return ind;
     endmethod
 
@@ -518,11 +510,31 @@ module mkTage(Tage#(numTables)) provisos(
     interface  dirPredInterface = interface DirPredictor#(OOTageTrainInfo);
         interface pred = predIfc;
         method Action update(Bool taken, OOTageTrainInfo#(numTables) train, Bool mispred);
-            UpdateInfo#(numTables) upd = UpdateInfo{tageInfo: train.tageInfo, mispred: mispred, taken: taken};
-            ooBuff.enqueue(upd, train.ooIndex);
-            if(mispred) begin
+            (*split*)
+            if(mispred) (* nosplit *) begin
+                
                 let numBits <- ooBuff.handleMispred(train.ooIndex);
-                historyUpdateBits.wset(tuple2(numBits, pack(taken)));
+                mispredictWire.send;
+
+                // Recover histories first, then update bit
+                let recoverNumber = numBits;
+                global.recoverFrom[recoverNumber].undo;
+                global.updateRecoveredHistory(pack(taken));
+
+                for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
+                    let tab = taggedTablesVector[i];
+                    /* It is untested if this will work for Toooba */
+                    `CASE_ALL_TABLES(tab, (*/ t.recoverHistory(recoverNumber); t.updateRecovered(pack(taken)); /*))
+                end 
+                // Retrieve allocation information for next update.
+                let allocateInfo <- getAllocatedIndexTag(train.tageInfo, taken);
+                
+                UpdateInfo#(numTables) upd = UpdateInfo{tageInfo: train.tageInfo, mispred: mispred, taken: taken, allocateInfo: allocateInfo};
+                ooBuff.enqueue(upd, train.ooIndex);
+            end
+            else (*nosplit*) begin
+                UpdateInfo#(numTables) upd = UpdateInfo{tageInfo: train.tageInfo, mispred: mispred, taken: taken, allocateInfo: tagged Invalid};
+                ooBuff.enqueue(upd, train.ooIndex);
             end
         endmethod
     

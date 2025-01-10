@@ -41,7 +41,7 @@ module mkGlobalBranchHistory(GlobalBranchHistory#(length));
         last_removed_history <= truncateLSB({last_removed_history, bits} << count);
     endrule
 
-    (* no_implicit_conditions *)
+    (* no_implicit_conditions, fire_when_enabled *)
     rule updateHistRecovered(updateRecoveredHistoryData.wget matches tagged Valid .taken &&& recover);
         shift_register[1] <= truncateLSB({shift_register[1], taken} << 1);
         last_removed_history <= truncateLSB({last_removed_history, shift_register[1][valueOf(length)-1]} << 1);
