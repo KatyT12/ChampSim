@@ -40,8 +40,8 @@ module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLe
     Ehr#(2, Bit#(length)) folded_history <- mkEhr(0);
     
     // For out of order recovery of branch history
-    Reg#(Bit#(MaxSpecSize)) last_spec_outcomes <- mkReg(0);
-    Reg#(Bit#(MaxSpecSize)) last_removed_history <- mkReg(0);
+    Ehr#(2,Bit#(MaxSpecSize)) last_spec_outcomes <- mkEhr(0);
+    Ehr#(2,Bit#(MaxSpecSize)) last_removed_history <- mkEhr(0);
 
     PulseWire recover <- mkPulseWire;
 
@@ -67,8 +67,11 @@ module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLe
             folded_history[1] <= new_folded_history;
 
             // For recovery updates 0001, 1000
-            last_spec_outcomes <= truncateLSB({last_spec_outcomes, newHist} << count);
-            last_removed_history <= truncateLSB({last_removed_history, eliminateBits} << count);
+            last_spec_outcomes[1] <= truncateLSB({last_spec_outcomes[1], newHist} << count);
+            last_removed_history[1] <= truncateLSB({last_removed_history[1], eliminateBits} << count);
+
+            //$display("Last spec outcomes %b\n", last_spec_outcomes[1]);
+            //$display("Last removed history %b\n", last_removed_history[1]);
         endaction
     endfunction
 
@@ -91,14 +94,15 @@ module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLe
         Integer j = histLength % valueOf(length);
         for(Integer k = 0; k < valueOf(MaxSpecSize); k = k +1) begin                    
             if(fromInteger(k) <= i) begin
-                Bit#(1) eliminateBit = last_removed_history[k];
+                Bit#(1) eliminateBit = last_removed_history[0][k];
                 Integer position = (j + k) % valueOf(length);
                 recovered[position] = eliminateBit^recovered[position];
             end
         end
         
-        Bit#(length) removed = recovered[recoverIndex:0] ^ last_spec_outcomes[recoverIndex:0];
+        Bit#(length) removed = recovered[recoverIndex:0] ^ last_spec_outcomes[0][recoverIndex:0];
         recovered = (removed[recoverIndex:0] << shiftNum) | truncateLSB(recovered >> (i+1));
+
         return recovered;
     endfunction
 
@@ -107,6 +111,11 @@ module mkFoldedHistory#(Integer histLength, GlobalBranchHistory#(GlobalHistoryLe
             recover.send;
             let recovered = getUndidHistory(i, shiftNum);
             folded_history[0] <= recovered;
+            
+            //$display("Last spec outcomes %b\n", last_spec_outcomes[0]);
+            //$display("Last removed history %b\n", last_removed_history[0]);
+            last_removed_history[0] <= last_removed_history[0] >> (i+1);
+            last_spec_outcomes[0] <= last_spec_outcomes[0] >> (i+1);
             return recovered;
         endactionvalue
     endfunction

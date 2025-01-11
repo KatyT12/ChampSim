@@ -247,6 +247,7 @@ module mkHistoryTestBench(Empty);
         formHistoryFSM.waitTillDone;
         $display("Global %b\n", gb.history);
         $display("Before update Folded %b\n", fh.history);
+
         action
             Integer rec = 3;
             Bit#(10) prevState = reverseBits(historyToForm << rec);
@@ -287,6 +288,62 @@ module mkHistoryTestBench(Empty);
 
     FSM testRecovery1FSM <- mkFSM(testRecovery1);
     FSM recoverThenUpdateFSM <- mkFSM(recoverThenUpdate);
+
+
+    Stmt sequentialUpdates = (seq
+        historyToForm <= 10'b1011010111;
+        formHistoryFSM.start;
+        formHistoryFSM.waitTillDone;
+        
+        
+        
+
+        for(count <= 0; count < 15; count <= count + 1) action
+            Bit#(1) value = lfsr.value[0];
+            lfsr.next;
+            gb.addHistoryBits(zeroExtend(value), 1);
+            fh.updateHistory(zeroExtend(value), 1);
+        endaction
+        // Original
+        foldingTestResult <= fh.history;
+        last_global_1 <= gb.history;
+        
+        $display("Global %b\n", gb.history);
+        $display("Before update Folded %b\n", fh.history);
+
+        for(count <= 0; count < 5; count <= count + 1) action
+            Bit#(1) value = lfsr.value[0];
+            lfsr.next;
+            gb.addHistoryBits(zeroExtend(value), 1);
+            fh.updateHistory(zeroExtend(value), 1);
+
+            //$display("After %d %b\n", count, fh.history);
+        endaction
+
+        action
+        gb.recoverFrom[2].undo;
+        fh.recoverFrom[2].undo;
+        gb.updateRecoveredHistory(1);
+        fh.updateRecoveredHistory(1);
+        endaction
+
+        action
+            $display("%b\n",fh.history);
+        endaction
+
+        action
+        gb.recoverFrom[2].undo;
+        fh.recoverFrom[2].undo;
+        endaction
+
+        action
+            $display("%b\n",fh.history);
+        endaction
+        dynamicAssert(gb.history == last_global_1, "Global failure on sequential mispredictions");
+        dynamicAssert(fh.history == foldingTestResult, "Folding failure on sequential mispredictions");
+    endseq);
+
+    FSM sequentialUpdatesFSM <- mkFSM(sequentialUpdates);
     
     Stmt stmt = seq     
         lfsr.seed(9);
@@ -302,6 +359,11 @@ module mkHistoryTestBench(Empty);
 
         testFoldedMultipleUpdateFSM.start;
         testFoldedMultipleUpdateFSM.waitTillDone;
+
+        $display("-------------- Test Sequential updates --------------\n");
+        sequentialUpdatesFSM.start;
+        sequentialUpdatesFSM.waitTillDone;
+
     endseq;
 
     mkAutoFSM(stmt);
