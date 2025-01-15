@@ -20,11 +20,7 @@
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 import Vector::*;
-
-
-typedef 64 AddrSz;
-typedef Bit#(AddrSz) Addr;
-typedef 1 SupSize;
+import ProcTypes::*;
 
 typedef struct {
     Bool taken;

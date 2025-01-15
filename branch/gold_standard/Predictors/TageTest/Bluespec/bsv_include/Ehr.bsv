@@ -56,7 +56,7 @@ module mkEhr#(t init)(Ehr#(n, t)) provisos(Bits#(t, tSz));
   Vector#(n, Vector#(n, RWire#(Bool))) dummy <- replicateM(replicateM(mkUnsafeRWire));
   Vector#(n, Reg#(Bool)) dummy2 <- replicateM(mkRevertingVirtualReg(True)); // this must be true
 
-  Reg#(t) rl <- mkConfigReg(init);
+  Reg#(t) rl <- mkReg(init);
 
   Ehr#(n, t) r = newVector;
 
