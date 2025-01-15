@@ -439,7 +439,7 @@ namespace gold_standard {
         //uint16_t tag = (pc & mask) ^ (pc >> (5 + params.tag_size) & mask) ^ folded_tag.to_ulong();
         uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5) ^ folded_history.to_ulong();
         uint64_t mask = ((uint64_t(1) << params.tag_size)-1);
-        uint16_t tag = (combined >> params.index_size) & mask;
+        uint16_t tag = (pc & mask) ^ (combined >> params.index_size) & mask;
         return tag;
     }
 

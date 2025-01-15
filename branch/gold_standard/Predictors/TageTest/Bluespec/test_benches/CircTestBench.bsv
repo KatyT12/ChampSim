@@ -83,6 +83,39 @@ module mkCircTestBench(Empty);
         action let t <- cb.retrieveNext; endaction
         action let t <- cb.retrieveNext; endaction
 
+        /* Go over the end */
+
+        action 
+            let a <- cb.specAssign[0].specAssign;
+            ind[0] <= a;
+        endaction
+
+        action 
+            let a <- cb.specAssign[0].specAssign;
+            ind[1] <= a;
+        endaction
+
+        action 
+            let a <- cb.specAssign[0].specAssign;
+            ind[2] <= a;
+        endaction
+
+        action 
+            let a <- cb.specAssign[0].specAssign;
+            ind[3] <= a;
+        endaction
+
+        action cb.enqueue(9, ind[2]); let f <- cb.handleMispred(ind[2]); endaction
+        cb.enqueue(8, ind[1]);
+        action cb.enqueue(7, ind[0]);  endaction
+        action cb.enqueue(10, ind[3]); endaction
+        
+
+        action let t <- cb.retrieveNext; endaction
+        action let t <- cb.retrieveNext; endaction
+        action let t <- cb.retrieveNext; endaction
+        action let t <- cb.retrieveNext; endaction
+
 
 
     endseq;

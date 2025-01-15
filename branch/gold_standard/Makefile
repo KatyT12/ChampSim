@@ -74,7 +74,7 @@ build_bsim:
 .PHONY: compile
 compile: build_bsim
 	@echo Compiling for Bluesim ...
-	bsc -u -sim -D $(DEBUG_MACRO) $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
+	bsc -u -sim -D GOLD_STANDARD -D $(DEBUG_MACRO) $(BSIM_DIRS) $(BSC_COMP_FLAGS) $(BSC_PATHS)  -g $(TOPMODULE)  $(TOPFILE)
 	@echo Compiling for Bluesim finished
 
 .PHONY: link

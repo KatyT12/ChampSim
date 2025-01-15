@@ -1,5 +1,6 @@
 import *TO_SUBSTITUTE_FILE*::*;
 import BrPred::*;
+import ProcTypes::*;
 
 export mkDirPredictor;
 export DirPredTrainInfo(..);
