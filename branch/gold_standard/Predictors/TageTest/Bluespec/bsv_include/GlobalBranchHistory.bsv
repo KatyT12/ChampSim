@@ -5,6 +5,7 @@ import BranchParams::*;
 import Vector::*;
 import ConfigReg::*;
 import Ehr::*;
+import ProcTypes::*;
 
 interface RecoverMechanism#(numeric type length);
     method Action undo;

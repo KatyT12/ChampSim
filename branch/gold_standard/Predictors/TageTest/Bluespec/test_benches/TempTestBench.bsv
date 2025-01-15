@@ -16,7 +16,7 @@ import RegFile::*;
 typedef 10 FoldingSize;
 
 `define NUM_TABLES 7
-
+typedef OOTageTrainInfo#(`NUM_TABLES) DirPredTrainInfo;
 (* synthesize *)
 module mkTempTestBench(Empty);
   Tage#(`NUM_TABLES) tage <- mkTage;
@@ -34,8 +34,11 @@ module mkTempTestBench(Empty);
   Reg#(Bit#(`NUM_TABLES)) expectedIn <- mkRegU;
   Reg#(Bit#(3)) startFrom <- mkRegU;
   Reg#(Bool) useBimodal <- mkReg(False);
+
+  Vector#(20, Reg#(DirPredResult#(DirPredTrainInfo))) training <- replicateM(mkReg(unpack(0)));
+
   
-    
+    /*
   Stmt testPredAltpred = (seq
     for(i <= 0; i < `NUM_TABLES; i <= i+1) action 
         if(allocs[i]) begin
@@ -97,9 +100,10 @@ module mkTempTestBench(Empty);
   FSM testPredAltpredFSM <- mkFSM(testPredAltpred);
   FSM testAllocationFSM <- mkFSM(testAllocation);
 
-
+*/
     Stmt stmt = seq
-        // -------------- Exhaustively Test utility functions
+      /*  
+      // -------------- Exhaustively Test utility functions
         dynamicAssert(boundedUpdate(2'b11, True) == 2'b11,"");
         dynamicAssert(boundedUpdate(2'b00, False) == 2'b00, "");
         dynamicAssert(boundedUpdate(2'b00, False) == 2'b00, "");
@@ -202,7 +206,29 @@ module mkTempTestBench(Empty);
         expectedIn <= 7'b0101100;
         testAllocationFSM.start;
         testAllocationFSM.waitTillDone;
+        */
+
+
+        // Simultaneos predictions during update
         
+        tage.dirPredInterface.nextPc(12922193);
+        action
+          let t0 <- tage.dirPredInterface.pred[0].pred;
+          let t1 <- tage.dirPredInterface.pred[1].pred;
+          training[0] <= t0;
+          training[1] <= t1;
+        endaction
+
+        tage.dirPredInterface.update(training[1].taken, training[1].train, False);
+        tage.dirPredInterface.nextPc(234234324);
+        action
+          let t1 <- tage.dirPredInterface.pred[1].pred;
+          training[2] <= t1;
+          
+          tage.dirPredInterface.update(!training[0].taken, training[0].train, True);
+        endaction
+
+
     endseq;
 
   mkAutoFSM(stmt);

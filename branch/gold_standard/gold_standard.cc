@@ -35,6 +35,7 @@ uint8_t O3_CPU::predict_branch(uint64_t ip)
     return 1;
   }
   #endif
+  return bsv_prediction;
   
 }
 

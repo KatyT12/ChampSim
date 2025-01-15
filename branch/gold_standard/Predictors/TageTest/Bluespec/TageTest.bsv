@@ -1,7 +1,6 @@
 import BrPred::*;
-import RegFile::*;
-import LFSR::*;
 import Vector::*;
+import ProcTypes::*;
 
 import TaggedTable::*;
 import Tage::*;

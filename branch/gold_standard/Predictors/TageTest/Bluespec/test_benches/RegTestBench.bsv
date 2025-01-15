@@ -4,6 +4,7 @@ import Assert::*;
 import StmtFSM::*;
 import Vector::*;
 import RegFile::*;
+import FIFO::*;
 
 import TageTest::*;
 import BrPred::*;
@@ -16,10 +17,33 @@ import Tage::*;
 (* synthesize *)
 module mkRegTestBench(Empty);
 
-  RegFile#(Bit#(3), Bit#(5)) rf <- mkRegFileWCFLoad(regInitFilename, 0, maxBound);
+  module mkLFIFO1 (FIFO#(t)) provisos(Bits#(t, _a));
+      Reg#(t) data <- mkRegU();
+      Reg#(Bool) full <- mkReg(False);
+      RWire#(void) deqEN <- mkRWire();
+      Bool deqp = isValid (deqEN.wget());
+      
+      method Action enq(t x) if
+        (!full || deqp);
+        full <= True; data <= x;
+      endmethod
+      
+      method Action deq() if (full);
+      full <= False; deqEN.wset(?);
+      endmethod
+      method t first() if (full);
+      return (data);
+      endmethod
+      method Action clear();
+      full <= False;
+      endmethod
+    endmodule
+
+  RegFile#(Bit#(5), Bit#(5)) rf <- mkRegFileWCF(0, maxBound);
   
   Reg#(Vector#(7, Bool)) allocs <- mkReg(replicate(False));
   Tage#(7) tage <- mkTage;
+  FIFO#(UInt#(4)) m <- mkLFIFO1;
 
     Stmt stmt = seq
       action 
@@ -38,7 +62,14 @@ module mkRegTestBench(Empty);
         $display(fshow(entry4));
         $display(fshow(entry5));
         $display(fshow(entry6)); // 12
+
+        
+        
     endaction
+
+    m.enq(3);
+    let a <- m.deq;
+    m.enq(2);
 
 
       //$display(fshow(rf.sub(0)));
