@@ -3,6 +3,7 @@ import FoldedHistory::*;
 import BrPred::*;
 import BranchParams::*;
 import RegFile::*;
+import ProcTypes::*;
 import Util::*;
 
 // Bimodal just uses the PC

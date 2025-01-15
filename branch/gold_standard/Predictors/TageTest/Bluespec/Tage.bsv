@@ -4,6 +4,8 @@ import Vector::*;
 import List::*;
 import HList::*;
 
+import ProcTypes::*;
+//import Types::*;
 import BrPred::*;
 import BranchParams::*;
 import BimodalTable::*;
@@ -12,6 +14,11 @@ import GlobalBranchHistory::*;
 import Ehr::*;
 import Util::*;
 import CircBuff::*;
+
+`ifdef DEBUG_TAGETEST
+import Cur_Cycle :: *;
+`endif
+
 /*
 export DirPredTrainInfo(..);
 export TageTrainInfo(..);
@@ -24,7 +31,6 @@ export mkTage;
 */
 
 // Not a reasonable solution
-
 
 `define WRAP_CODE(body) \
     action /* body */ endaction
@@ -67,7 +73,7 @@ typedef Bit#(PCIndexSz) PCIndex;
 typedef Bit#(2) Entry;
 typedef Bit#(TLog#(numTables)) TableIndex#(numeric type numTables);
 
-typedef Tuple2#(Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED))), Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED)))) PredictionTableInfo#(numeric type num);
+typedef Tuple2#(Maybe#(Tuple3#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED), Bit#(`MAX_INDEX_SIZE))), Maybe#(Tuple2#(Bit#(TLog#(num)), TaggedTableEntry#(`MAX_TAGGED)))) PredictionTableInfo#(numeric type num);
 
 
 typedef struct {
@@ -156,13 +162,10 @@ module mkTage(Tage#(numTables)) provisos(
     Vector#(7, ChosenTaggedTables) taggedTablesVector = cons(T_9_9_5(t1), cons(T_9_9_9(t2), cons(T_9_10_15(t3), cons(T_9_10_25(t4), cons(T_9_11_44(t5), cons(T_9_11_76(t6), cons(T_9_12_130(t7), nil)))))));
     Reg#(Addr) currentPc <- mkRegU;
     Reg#(UInt#(`METAPREDICTOR_CTR_SIZE)) alt_on_na <- mkReg(1 << (`METAPREDICTOR_CTR_SIZE-1));
-    CircBuff#(MaxSpecSize, UpdateInfo#(numTables)) ooBuff <- mkCircBuff;
-
-    RWire#(Tuple2#(Bit#(TLog#(MaxSpecSize)), Bit#(1))) historyUpdateBits <- mkRWire;
+    CircBuff#(MaxSpecSize, Bool) ooBuff <- mkCircBuff;
 
     PulseWire mispredictWire <- mkPulseWire;
-    PulseWire updateThisCycleWire <- mkPulseWire;
-    
+
     Ehr#(TAdd#(1, SupSize), SupCnt) numPred <- mkEhr(0);
     Ehr#(TAdd#(1, SupSize), Bit#(SupSize)) predResults <- mkEhr(0);
 
@@ -207,27 +210,28 @@ module mkTage(Tage#(numTables)) provisos(
         end
     endfunction
 
-    function Tuple2#(PredictionTableInfo#(numTables), Bit#(numTables)) find_pred_altpred(Addr pc);
+    function Tuple2#(PredictionTableInfo#(numTables), Bit#(numTables)) find_pred_altpred(Addr pc, Bit#(TLog#(SupSize)) numPred);
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) entries_compare = replicate(tagged Invalid);
         Vector#(numTables,Maybe#(Bit#(TLog#(numTables)))) altpred_compare = replicate(tagged Invalid);
         Bit#(numTables) replaceableEntries = 0;
         
         Vector#(numTables,TaggedTableEntry#(`MAX_TAGGED)) entries = replicate(TaggedTableEntry{tag:0, predictionCounter:0, usefulCounter:0});
+        Vector#(numTables,Bit#(`MAX_INDEX_SIZE)) indices = replicate(0);
 
         
-        for(Integer i = 0; i < valueOf(numTables); i=i+1) begin
-            ChosenTaggedTables tab = taggedTablesVector[i];    
+        for(Integer j = 0; j < valueOf(numTables); j=j+1) begin
+            ChosenTaggedTables tab = taggedTablesVector[j];    
             `CASE_ALL_TABLES(tab, 
             (*/
                 // Could do this in one
-                match {.tag, .index} = t.trainingInfo(pc, BEFORE_RECOVERY);
-                let entry = t.access_wrapped_entry(pc);
-                replaceableEntries[i] = pack(entry.usefulCounter == 0);
+                match {.tag, .index}  = t.accessPredInfo[numPred].access(pc);
+                let entry = t.access_wrapped_entry(pc, truncate(index));
+                replaceableEntries[j] = pack(entry.usefulCounter == 0);
                 
-                
-                entries[i] = entry;
-                if (zeroExtend(tag) == entry.tag) begin
-                    entries_compare[i] = tagged Valid fromInteger(i);
+                indices[j] = index;
+                entries[j] = entry;
+                if (tag == entry.tag) begin
+                    entries_compare[j] = tagged Valid fromInteger(j);
                 end
                 /*)
             )
@@ -241,21 +245,20 @@ module mkTage(Tage#(numTables)) provisos(
         // formout output
         if (pred_vec[0] matches tagged Valid .x)
             if (altpred_vec[0] matches tagged Valid .y)
-                ret = tuple2(tagged Valid tuple2(x, entries[x]), tagged Valid tuple2(y, entries[y]));
+                ret = tuple2(tagged Valid tuple3(x, entries[x], indices[x]), tagged Valid tuple2(y, entries[y]));
             else
-                ret = tuple2(tagged Valid tuple2(x, entries[x]), tagged Invalid);
+                ret = tuple2(tagged Valid tuple3(x, entries[x], indices[x]), tagged Invalid);
         
         return tuple2(ret, replaceableEntries);
     endfunction
 
-
     // WARNING - REMOVE ACTIONVALUE AFTER DEBUG
-    function ActionValue#(Maybe#(TableIndex#(numTables))) allocate(TageTrainInfo#(numTables) train, Bool taken);
-        actionvalue
+    function Action allocate(TageTrainInfo#(numTables) train, Bool taken);
+        action
         Maybe#(TableIndex#(numTables)) ret = tagged Invalid;
         
         if(train.provider_info matches tagged Valid .inf &&& inf.provider_table == fromInteger(valueOf(numTables)-1)) begin
-            `ifdef DEBUG
+            `ifdef DEBUG_TAGETEST
                 $display("Do Nothing\n");
             `endif
         end
@@ -304,26 +307,30 @@ module mkTage(Tage#(numTables)) provisos(
                     end
                 end
 
+                `ifdef DEBUG_TAGETEST
+                    Bit#(20) index = 0;
+                    Bit#(`MAX_TAGGED) tag = 0;
+                    let tab = taggedTablesVector[ind];
+                    `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(train.pc, AFTER_RECOVERY))); tag = zeroExtend(tpl_1(t.trainingInfo(train.pc, AFTER_RECOVERY))); /*))
+                    $display("TAGETEST ALLOCATE FOR %d %d %d %d\n",train.pc, ind, index, tag);
+                `endif
+
                 `CASE_ALL_TABLES(taggedTablesVector[ind], (*/ t.allocateEntry(train.pc, taken); /*))
-                ret = tagged Valid ind;
             end
         end
-        return ret;
-        endactionvalue
+    endaction
     endfunction
 
     function Action updateWithTrain(Bool taken, TageTrainInfo#(numTables) train, Bool mispred);
         action
+
+        `ifdef DEBUG_TAGETEST
+            `CASE_ALL_TABLES(taggedTablesVector[0], (*/ $display("TAGETEST UPDATE FOLDING %b\n", t.debugGetHistory(AFTER_RECOVERY, tagged Invalid)) ;/*))
+        `endif
+
         // Update bimodal table either way
         bimodalTable.updateEntry(train.pc, taken);
         Bool mispredict = taken != train.taken;
-
-        updateThisCycleWire.send;
-        
-        // Allocate on misprediction
-        if (mispredict) begin
-            let i <- allocate(train, taken);
-        end
 
         // Tagged tables update
         if(train.provider_info matches tagged Valid .info) begin
@@ -339,6 +346,17 @@ module mkTage(Tage#(numTables)) provisos(
             `CASE_ALL_TABLES(providerTable, (*/ t.updateEntry(info.index, entry.tag, taken, u); /*))
 
             // ALT_ON_NA
+            `ifdef DEBUG_TAGETEST
+                if(train.alt_table matches tagged Valid .alt_t) begin
+                $display("TAGETEST UPDATE ALT PRED TABLE %d\n", alt_t);
+                end
+                else
+                    $display("TAGETEST UPDATE ALT PRED BIMODAL\n");
+                $display("TAGETEST UPDATE ALT PRED TAKEN %d\n", train.alt_prediction);
+                $display("TAGETEST PROVIDR ENTRY COUNTER %d\n", entry.predictionCounter);
+                $display("TAGETEST PROVIDR ENTRY USEFUL %d\n", entry.usefulCounter);
+            `endif
+
             if(entry.usefulCounter == 0 && weakCounter(entry.predictionCounter)) begin
                 if(train.alt_prediction != train.provider_prediction)
                     alt_on_na <= unpack(boundedUpdate(pack(alt_on_na), train.alt_prediction == taken));
@@ -346,39 +364,35 @@ module mkTage(Tage#(numTables)) provisos(
         end
 
         // Update LSFR
-        `ifndef OFF_GOLD_STANDARD
+        `ifdef GOLD_STANDARD
             lfsr.next;
         `endif
     endaction
     endfunction
 
-      
-    (* no_implicit_conditions*)
-    rule updateHistory(historyUpdateBits.wget matches tagged Invalid);
-        // Update history speculatively
-        let num = numPred[valueOf(SupSize)];
-        let results = predResults[valueOf(SupSize)];
-
-        if(num != 0) begin
-            global.addHistoryBits(results, num);
-            for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
-                let tab = taggedTablesVector[i];
-                `CASE_ALL_TABLES(tab, (*/ t.updateHistory(results, num); /*))
-            end
-        end
-    endrule
-
+    
+    //rule updateHistory(!mispredictWire); NOT SURE ABOUT THIS -------------------------------------
     (* no_implicit_conditions, fire_when_enabled *)
-    rule recoverHistory(historyUpdateBits.wget matches tagged Valid {.updNum, .taken});
-        // Recover histories first, then update bit
-        let recoverNumber = updNum;
-        global.recoverFrom[recoverNumber].undo;
-        global.updateRecoveredHistory(pack(taken));
-        for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
-            let tab = taggedTablesVector[i];
-            /* It is untested if this will work for Toooba */
-            `CASE_ALL_TABLES(tab, (*/ t.recoverHistory(recoverNumber); t.updateRecovered(taken); /*))
-        end 
+    rule updateHistory;
+        //if(!mispredictWire) begin
+        // Update history speculatively
+            let num = numPred[valueOf(SupSize)];
+            let results = predResults[valueOf(SupSize)];
+
+            
+            if(num != 0) begin
+                `ifdef DEBUG_TAGETEST   
+                $display("TAGETEST Update history, cycle %d\n", cur_cycle);
+                $display("TAGETEST Global %b\n", global.history);
+                `endif
+
+                global.addHistoryBits(results, num);
+                for(Integer i = 0; i < valueOf(numTables); i = i+1) begin
+                    let tab = taggedTablesVector[i];
+                    `CASE_ALL_TABLES(tab, (*/ t.updateHistory(results, num); /*))
+                end
+            end
+      //  end
     endrule
 
     (* no_implicit_conditions, fire_when_enabled *)
@@ -388,49 +402,68 @@ module mkTage(Tage#(numTables)) provisos(
             lfsr.seed('d9);
             starting <= False;
         end
-        `ifdef OFF_GOLD_STANDARD
-        else
-            lfsr.next;
-        `endif
+        else begin
+            `ifndef GOLD_STANDARD
+                lfsr.next;
+            `endif
 
-        numPred[valueOf(SupSize)] <= 0;
-        predResults[valueOf(SupSize)] <= 0;
+            numPred[valueOf(SupSize)] <= 0;
+            predResults[valueOf(SupSize)] <= 0;
+        end
     endrule
 
+    /*
     (* no_implicit_conditions, fire_when_enabled *)
     rule scheduleUpdate(!starting);
         let updateThisCycle <- ooBuff.retrieveNext;
         (*split*)
-        if(updateThisCycle matches tagged Valid .trainInfo) begin
-            (*nosplit*)
-            updateWithTrain(trainInfo.taken, trainInfo.tageInfo, trainInfo.mispred);
+        if(updateThisCycle matches tagged Valid .train) (* nosplit *) begin
+            updateWithTrain(train.taken, train.tageInfo, train.mispred, train.allocateInfo);
         end
     endrule
+    */
 
     for(Integer i=0; i < valueOf(SupSize); i=i+1) begin
         predIfc[i] = (interface DirPred;
         
         method ActionValue#(DirPredResult#(OOTageTrainInfo#(numTables))) pred;
+            
             TageTrainInfo#(numTables) ret = unpack(0);
             Addr pc = offsetPc(currentPc, i);
 
+            `ifdef DEBUG_TAGETEST
+                $display("TAGETEST LFSR %d\n", lfsr.value);
+                $display("TAGETEST ALT_ON_NA %d\n", alt_on_na);
+            `endif
+
+            `ifdef DEBUG_TAGETEST
+                `CASE_ALL_TABLES(taggedTablesVector[0], (*/ $display("TAGETEST PRED FOLDING %b\n", t.debugGetHistory(BEFORE_RECOVERY, tagged Valid truncate(numPred[i]))) ;/*))
+            `endif
+
+
             // Retrieve provider and alternative table
-            match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred(pc);
+            match {{.pred, .altpred}, .replaceableEntries} = find_pred_altpred(pc, truncate(numPred[i]));
             ret.replaceableEntries = replaceableEntries;
             ret.pc = pc;
 
-            if(pred matches tagged Valid {.pred_index, .pred_entry}) begin 
+            
+            if(pred matches tagged Valid {.pred_index, .pred_entry, .pred_table_index}) begin 
                 Bool prediction = takenFromCounter(pred_entry.predictionCounter);
                 ret.provider_prediction = prediction;
+
+                `ifdef DEBUG_TAGETEST
+                    $display("TAGETEST TABLE INDEX %d %d %d\n",pred_index, pred_table_index, pred_entry.tag);
+                `endif
                 
                 // Get the index to avoid recomputing on update (not possible unless mispredict)
-                Bit#(`MAX_INDEX_SIZE) index = 0;
-                let tab = taggedTablesVector[pred_index];
-                `CASE_ALL_TABLES(tab, (*/ index = zeroExtend(tpl_2(t.trainingInfo(pc, BEFORE_RECOVERY))); /*))
-
-                ret.provider_info = tagged Valid ProviderTrainInfo{index: index, provider_table: pred_index, provider_entry: pred_entry};
+                
+                ret.provider_info = tagged Valid ProviderTrainInfo{index: pred_table_index, provider_table: pred_index, provider_entry: pred_entry};
                 if (altpred matches tagged Valid {.alt_index, .alt_entry}) begin
                     ret.alt_table = tagged Valid alt_index;
+
+                    `ifdef DEBUG_TAGETEST
+                    $display("TAGETEST ALT ENTRY %d tag:%d\n", alt_index, alt_entry.tag);
+                    `endif
                     
                     Bool alt_prediction = takenFromCounter(alt_entry.predictionCounter);                 
                     ret.alt_prediction = alt_prediction;
@@ -453,6 +486,10 @@ module mkTage(Tage#(numTables)) provisos(
                 end
             end
             else begin
+
+                `ifdef DEBUG_TAGETEST
+                    $display("TAGETEST USE BIMODAL\n");
+                `endif
                 ret.alt_table = tagged Invalid;
                 ret.provider_info = tagged Invalid;
                 ret.use_alt = False;
@@ -463,10 +500,14 @@ module mkTage(Tage#(numTables)) provisos(
             end
 
             // Update counters and results
-            // Forces predictions in order.
             numPred[i] <= numPred[i] + 1;
             predResults[i] <= predResults[i] | (zeroExtend(pack(ret.taken)) << numPred[i]);
             let ooIndex <- ooBuff.specAssign[i].specAssign;
+
+            `ifdef DEBUG_TAGETEST   
+                $display("TAGETEST Prediction on: %x,%d, Taken: %d, cycle %d\n", currentPc , i, ret.taken, cur_cycle);
+                $display("TAGETEST Id given = %d\n",ooIndex);
+            `endif
 
             // Also update histories
             return DirPredResult {
@@ -495,7 +536,7 @@ module mkTage(Tage#(numTables)) provisos(
 
     method Action debugAllocate(Addr pc, Bit#(TLog#(numTables)) tableNum);
         ChosenTaggedTables tab = taggedTablesVector[tableNum];
-        `CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, True); /*))
+        //`CASE_ALL_TABLES(tab, (*/ t.allocateEntry(pc, True); /*))
     endmethod
 
     method Action debugResetEntry(Addr pc, Bit#(TLog#(numTables)) tableNum);
@@ -504,7 +545,7 @@ module mkTage(Tage#(numTables)) provisos(
     endmethod
 
     method ActionValue#(Maybe#(TableIndex#(numTables))) debugMispredictAllocation(TageTrainInfo#(numTables) train, Bool taken);
-        let ind <- allocate(train, taken);
+        let ind <- allocateGivenEntry(train, taken);
         return ind;
     endmethod
 
@@ -518,12 +559,40 @@ module mkTage(Tage#(numTables)) provisos(
     interface  dirPredInterface = interface DirPredictor#(OOTageTrainInfo);
         interface pred = predIfc;
         method Action update(Bool taken, OOTageTrainInfo#(numTables) train, Bool mispred);
-            UpdateInfo#(numTables) upd = UpdateInfo{tageInfo: train.tageInfo, mispred: mispred, taken: taken};
-            ooBuff.enqueue(upd, train.ooIndex);
-            if(mispred) begin
+            (* split *)
+            if(mispred) (* nosplit *) begin
+                mispredictWire.send;
+                
                 let numBits <- ooBuff.handleMispred(train.ooIndex);
-                historyUpdateBits.wset(tuple2(numBits, pack(taken)));
+                // Recover histories first, then update bit
+                let recoverNumber = numBits;
+                global.recoverFrom[recoverNumber].undo;
+                global.updateRecoveredHistory(pack(taken));
+
+                `ifdef DEBUG_TAGETEST   
+                $display("TAGETEST Misprediction on %x, cycle %d\n", train.tageInfo.pc, cur_cycle);
+                `endif
+                for (Integer i = 0; i < valueOf(numTables); i = i +1) begin
+                    let tab = taggedTablesVector[i];
+                    /* It is untested if this will work for Toooba */
+                    `CASE_ALL_TABLES(tab, (*/ t.recoverHistory(recoverNumber); t.updateRecovered(pack(taken)); /*))
+                end 
+                // Retrieve allocation information for next update.
+                ooBuff.enqueue(True, train.ooIndex);
+
+                let trainInfo = train.tageInfo;
+                allocate(trainInfo, taken);
+                updateWithTrain(taken, trainInfo, mispred);
             end
+            else (* nosplit *) begin
+                ooBuff.enqueue(True, train.ooIndex);
+                let trainInfo = train.tageInfo;
+                updateWithTrain(taken, trainInfo, mispred);
+                `ifdef DEBUG_TAGETEST
+                $display("TAGETEST correct prediction on %x, cycle %d\n", train.tageInfo.pc, cur_cycle);
+                `endif
+            end
+            
         endmethod
     
         method Action nextPc(Addr pc);
