@@ -25,15 +25,13 @@ void O3_CPU::initialize_branch_predictor() {
 uint8_t O3_CPU::predict_branch(uint64_t ip)
 {
   uint8_t bsv_prediction = bluespec_predictor.predict_branch(ip);
+  last_bsv_prediction = bsv_prediction > 0;
   #ifndef MODEL_OFF
-  if(true){
-    uint8_t model_prediction = model_predictor.predict_branch(ip);
-    last_model_prediction = model_prediction > 0;
-    last_bsv_prediction = bsv_prediction > 0;
-    return model_prediction;
-  }else{
-    return 1;
-  }
+  uint8_t model_prediction = model_predictor.predict_branch(ip);
+  last_model_prediction = model_prediction > 0;
+  return model_prediction;
+  #else
+  return bsv_prediction;
   #endif
   
 }
