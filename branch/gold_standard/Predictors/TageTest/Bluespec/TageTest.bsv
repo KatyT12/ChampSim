@@ -1,7 +1,6 @@
 import BrPred::*;
-import RegFile::*;
-import LFSR::*;
 import Vector::*;
+import ProcTypes::*;
 
 import TaggedTable::*;
 import Tage::*;
@@ -14,18 +13,18 @@ export PCIndexSz;
 export mkTageTest;
 
 `define NUM_TABLES 7
-typedef TageTrainInfo#(`NUM_TABLES) DirPredTrainInfo;
+typedef OOTageTrainInfo#(`NUM_TABLES) DirPredTrainInfo;
 
-module mkTageTest(DirPredictor#(TageTrainInfo#(`NUM_TABLES)));
+module mkTageTest(DirPredictor#(OOTageTrainInfo#(`NUM_TABLES)));
     Reg#(Bool) starting <- mkReg(True);
     Tage#(7) tage <- mkTage;
 
     
-    Vector#(SupSize, DirPred#(TageTrainInfo#(`NUM_TABLES))) predIfc;
+    Vector#(SupSize, DirPred#(OOTageTrainInfo#(`NUM_TABLES))) predIfc;
     for(Integer i=0; i < valueOf(SupSize); i=i+1) begin
         predIfc[i] = (interface DirPred;
         
-        method ActionValue#(DirPredResult#(TageTrainInfo#(`NUM_TABLES))) pred;
+        method ActionValue#(DirPredResult#(OOTageTrainInfo#(`NUM_TABLES))) pred;
             let result <- tage.dirPredInterface.pred[i].pred;
             return result;
         endmethod
@@ -34,7 +33,7 @@ module mkTageTest(DirPredictor#(TageTrainInfo#(`NUM_TABLES)));
     
     interface pred = predIfc;
 
-    method Action update(Bool taken, TageTrainInfo#(`NUM_TABLES) train, Bool mispred);
+    method Action update(Bool taken, OOTageTrainInfo#(`NUM_TABLES) train, Bool mispred);
         tage.dirPredInterface.update(taken, train, mispred);
     endmethod
 
