@@ -29,8 +29,11 @@ PL = /opt/tools/bsc/latest/lib/Libraries/
 BSC_COMP_FLAGS = -elab -keep-fires -aggressive-conditions -no-warn-action-shadowing
 INCLUDE = $(TOPDIR)/include
 BSC_LINK_FLAGS = -keep-fires
+
 PREDICTOR ?= TourPredictor
-BSC_PATHS = -p $(BSV_SRC):$(BSV_INCLUDE):$(PRED_DIR)/$(PREDICTOR)/Bluespec:$(PL)
+PREDICTOR_INCLUDE_DIR ?= $(PRED_DIR)/$(PREDICTOR)/Bluespec/bsv_include
+
+BSC_PATHS = -p $(BSV_SRC):$(BSV_INCLUDE):$(PRED_DIR)/$(PREDICTOR)/Bluespec:$(PREDICTOR_INCLUDE_DIR):$(PL)
 
 TOP_BSV_PREDICTOR_FILE ?= $(TOPDIR)/$(PRED_DIR)/$(PREDICTOR)/Bluespec/$(PREDICTOR).bsv
 DIR_PREDICTOR_INTERFACE_LOCATION ?= $(BSV_INCLUDE)/Predictor.bsv
