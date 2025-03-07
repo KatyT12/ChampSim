@@ -26,6 +26,16 @@ namespace champsim
 {
 uint64_t tracereader::instr_unique_id = 0;
 
+std::optional<int> bsv::bsv_pipe_descriptor = {};
+std::function<void(uint64_t, uint64_t, uint8_t, uint8_t)> bsv::send_branch_pred = nullptr;
+uint64_t* bsv::total_prefetched = nullptr;
+
+void enable_ahead_predictions(int fd, std::function<void(uint64_t, uint64_t, uint8_t, uint8_t)> f,uint64_t* total_prefetched_ref) {
+    bsv::bsv_pipe_descriptor = fd;
+    bsv::send_branch_pred = f;
+    bsv::total_prefetched = total_prefetched_ref; 
+}
+
 ooo_model_instr apply_branch_target(ooo_model_instr branch, const ooo_model_instr& target)
 {
   branch.branch_target = (branch.is_branch && branch.branch_taken) ? target.ip : 0;

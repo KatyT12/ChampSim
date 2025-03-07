@@ -1,0 +1,8 @@
+{
+    "gold_standard": {
+        "predictor": "Bimodal",
+        "debug": true,
+        "no_model": false
+    },
+    "num_cores": 1
+}
