@@ -1,5 +1,5 @@
-#ifndef TAGE_HPP
-#define TAGE_HPP
+#ifndef BATAGE_HPP
+#define BATAGE_HPP
 
 #include "../../../include/gold_standard.hpp"
 #include "../../../include/Components/lfsr.hpp"
@@ -14,40 +14,18 @@
 #include <cstdio>
 
 
-
-/*
-TAGE paper
-
-In order to limit this phenomenon, it was proposed in [24] to include non-conditional
-branches in the branch history ghist (by inserting a taken bit) and to also use a (limited)
-16-bit path history phist consisting of 1 address bit per branch.
-
-*/
-
 #define DEBUG_PRED 0
 
 namespace gold_standard {
     // Default values of 0
     
-    #define U_COUNTER_SIZE 2
     #define COUNTER_SIZE 3
-    
-    constexpr uint8_t U_COUNTER_MAX = (1 << U_COUNTER_SIZE) - 1;
-    constexpr uint8_t WEAK_TAKEN  = (1 << COUNTER_SIZE) / 2;
-    constexpr uint8_t WEAK_NOT_TAKEN = ((1 << COUNTER_SIZE) / 2) - 1;
-
-
     #define COUNTER_MAX ((1 << COUNTER_SIZE) - 1)
-
     #define BIMODAL_COUNTER_SIZE 2
-
     #define BIMODAL_PREDICTION_BITS 13
     #define BIMODAL_HYSTERESIS_BITS 11
 
-    #define ALT_ON_NA_BITS 4
-    
-    constexpr uint8_t ALT_ON_NA_MAX = (1 << ALT_ON_NA_BITS) - 1;
-    constexpr uint8_t ALT_ON_NA_THRESHOLD  = (1 << ALT_ON_NA_BITS) / 2;
+
 
     constexpr uint16_t prediction_entries = (( 1 << BIMODAL_PREDICTION_BITS) / 64);
     constexpr uint16_t hysteresis_entries = (( 1 << BIMODAL_HYSTERESIS_BITS) / 64);
@@ -99,7 +77,6 @@ namespace gold_standard {
         bimodal_prediction_bits.fill(~(uint64_t)0);
         bimodal_hysteresis_bits.fill(0);
 
-        alt_on_na = ALT_ON_NA_THRESHOLD;   
         std::cout << "Initialized\n";
     }
 
@@ -113,23 +90,34 @@ namespace gold_standard {
         tagged_entry alt_entry;
         
         //printf("GOLD STANDARD PREDICT %d, LSFSR %d", ip)
+        uint8_t conf = 3;
+        uint8_t alt_conf = 0;
         
         for(int i = tagged_tables.size()-1; i >= 0; i--){
             
             auto entry = tagged_tables[i]->access_entry(ip);
             if(entry.has_value()){
-                if(!found_provider){
+                tagged_entry& ent = entry.value();
+                
+                uint8_t medium = (ent.takenCounter == (2*ent.notTakenCounter + 1)) || (ent.notTakenCounter == (2*ent.takenCounter + 1));
+                uint8_t low = (ent.takenCounter < (2*ent.notTakenCounter + 1)) || (ent.notTakenCounter < (2*ent.takenCounter + 1));
+                uint8_t confidence = 2 * low + medium;
+
+                if(confidence < conf){
                     found_provider = true;
+                    found_alt = false;
+                    conf = confidence;
                     provider = i;
                     provider_entry = entry.value();
+                }    
                 }else if(!found_alt){
                     found_alt = true;
+                    alt_conf = confidence;
                     alt = i;
                     alt_entry = entry.value();
                 }
             }
             debug_printf("%ld\n", ip);
-        }
         
         if(found_provider){
             debug_printf("%d\n", provider_entry.counter);
@@ -147,20 +135,22 @@ namespace gold_standard {
 
             last_training_data.use_bimodal = false;
             last_training_data.pred_table = provider;
-            last_training_data.provider_prediction = provider_entry.counter > WEAK_NOT_TAKEN;
+            last_training_data.provider_prediction = provider_entry.takenCounter > provider_entry.notTakenCounter;
             last_training_data.taken = last_training_data.provider_prediction;
+            last_training_data.provider_confidence = conf;
+            last_training_data.provider_entry = provider_entry;
 
             if(!found_alt){
                last_training_data.alt_bimodal = true;
                last_training_data.alt_prediction = access_bimodal_entry(ip) == 1;
+               assert(false);
+               last_training_data.alt_confidence = 1; // MAKE BIMODAL 3 BITS LATER and use mapping
             }else{
                 last_training_data.alt_bimodal = false;
                 last_training_data.alt_table = alt;
-                last_training_data.alt_prediction = alt_entry.counter > WEAK_NOT_TAKEN;
+                last_training_data.alt_confidence = alt_conf;
+                last_training_data.alt_prediction = alt_entry.takenCounter > alt_entry.notTakenCounter;
                 // Is this also true if the alternative is bimodal?
-                if(provider_entry.useful_counter == 0 && (provider_entry.counter == WEAK_TAKEN || provider_entry.counter == WEAK_NOT_TAKEN) && alt_on_na >= ALT_ON_NA_THRESHOLD){
-                    last_training_data.taken = last_training_data.alt_prediction;
-                }
             }
         }
 
@@ -193,6 +183,7 @@ namespace gold_standard {
 
         set_bimodal_bit(bimodal_index.first, (counter & 2) >> 1, bimodal_prediction_bits);
         set_bimodal_bit(bimodal_index.second, counter & 1, bimodal_hysteresis_bits);
+        bool mispred = last_training_data.taken != branch_taken;
 
         // ******** Allocation on misprediction
         if(last_training_data.taken != branch_taken && (last_training_data.use_bimodal || (last_training_data.pred_table < tagged_tables.size()-1))){
@@ -261,23 +252,14 @@ namespace gold_standard {
                 fprintf(file, "GOLD STANDARD PROVIDER ENTRY COUNTER %d\n", t.counter);
                 fprintf(file, "GOLD STANDARD PROVIDER USEFUL COUNTER %d\n", t.useful_counter);
             }
-            
-            // Update ALT_ON_NA
-            if(t.useful_counter == 0 && (t.counter == WEAK_NOT_TAKEN || t.counter == WEAK_TAKEN)){   
-                if(last_training_data.alt_prediction != last_training_data.provider_prediction){
-                    update_counter(alt_on_na, last_training_data.alt_prediction == branch_taken, ALT_ON_NA_MAX);
-                }
 
+            if(mispred || last_training_data.provider_confidence > 0){
+                update_dual(t.takenCounter, t.notTakenCounter, branch_taken, COUNTER_MAX);
+            }else if(last_training_data.provider_confidence == 0 && last_training_data.alt_confidence == 0 && last_training_data.alt_prediction == taken && !mispred){
+                decay_dual(t.takenCounter, t.notTakenCounter);
             }
 
-            // Update counter regardless
-            update_counter(t.counter, branch_taken, COUNTER_MAX);
-            // Update useful counters
-            if(last_training_data.provider_prediction == branch_taken && last_training_data.alt_prediction != branch_taken) {
-                update_counter(t.useful_counter, true, U_COUNTER_MAX);
-            }else if(last_training_data.provider_prediction != branch_taken && last_training_data.alt_prediction == branch_taken) {
-                update_counter(t.useful_counter, false, U_COUNTER_MAX);
-            }
+            // Need more updates...
             pred->set_entry(index, t);
         }
 
@@ -409,20 +391,6 @@ namespace gold_standard {
             
             uint8_t i = params.history_length % size;
             folded_history.set(i, global.test(params.history_length) ^ folded_history.test(i));
-
-            // Path history, could probably just merge this with the global history actually but path history must be 16 bits
-            /*last_bit = folded_path_history.test(params.index_size-1);
-            folded_path_history <<= 1;
-            i = PATH_HISTORY_SIZE % params.index_size;
-            folded_path_history.set(0, last_bit ^ path.test(0));
-            folded_path_history.set(i, path.test(PATH_HISTORY_SIZE-1));
-
-            // Not sure the best way to change this up so the tag is different enough
-            last_bit = folded_tag.test(params.tag_size-1);
-            folded_tag <<= 1;
-            folded_tag.set(0, global.test(0) ^ last_bit);
-            i = (params.history_length-3) % params.tag_size;
-            folded_tag.set(i, global.test(params.history_length-3) ^ folded_tag.test(i));*/
     }
 
     template<const table_parameters& params>
@@ -439,7 +407,7 @@ namespace gold_standard {
     template<const table_parameters& params>
     uint16_t tagged_table<params>::compute_tag(uint64_t pc){
         //uint16_t tag = (pc & mask) ^ (pc >> (5 + params.tag_size) & mask) ^ folded_tag.to_ulong();
-        uint64_t combined = (pc ^ (pc >> 2) ^ (pc >> 5)) ^ folded_history.to_ulong();
+        uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5) ^ folded_history.to_ulong();
         uint64_t mask = ((uint64_t(1) << params.tag_size)-1);
         uint16_t tag = (pc & mask) ^ (combined >> params.index_size) & mask;
         return tag;
