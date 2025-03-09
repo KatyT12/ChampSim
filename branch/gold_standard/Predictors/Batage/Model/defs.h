@@ -17,12 +17,12 @@ namespace gold_standard {
     #define LFSR_SIZE 64
 
     #define LFSR_DECAY_MASK 0x3fff // 14
-    #define DECAY_THRESH 3
+    #define DECAY_THRESH 2
     
     #define LFSR_OFFSET_MASK 0x1c000
     #define LFSR_OFFSET_SHIFT 14
 
-    #define LFSR_ALLOCATE_MASK 0x03d0000 // 5 bits
+    #define LFSR_ALLOCATE_MASK 0x00d0000 // 3 bits
     #define LFSR_ALLOCATE_SHIFT 17
 
     #define MINAP 7
@@ -63,9 +63,9 @@ namespace gold_standard {
     #define DEFAULT_VALUE tagged_entry{0,TAGE_TAKEN_CTR_INIT, TAGE_NOTTAKEN_CTR_INIT}
 
     void update_dual(uint8_t& counter1, uint8_t& counter2, bool taken, uint8_t limit){
-        if(taken && counter1 <= limit){
+        if(taken && counter1 < limit){
             counter1 = std::min(limit, uint8_t(counter1+1));
-        }else if(!taken && counter2 <= limit) {
+        }else if(!taken && counter2 < limit) {
             counter2 = std::min(limit, uint8_t(counter2+1));;
         }
         else{
@@ -86,7 +86,7 @@ namespace gold_standard {
 
     uint8_t get_tagged_confidence(uint8_t takenCounter, uint8_t notTakenCounter){
         uint8_t medium = (takenCounter == (2*notTakenCounter + 1)) || (notTakenCounter == (2*takenCounter + 1));
-        uint8_t low = (takenCounter < (2*notTakenCounter + 1)) || (notTakenCounter < (2*takenCounter + 1));
+        uint8_t low = (takenCounter < (2*notTakenCounter + 1)) && (notTakenCounter < (2*takenCounter + 1));
         uint8_t confidence = 2 * low + medium;
         return confidence;
     }

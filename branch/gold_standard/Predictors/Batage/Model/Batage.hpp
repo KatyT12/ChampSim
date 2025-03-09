@@ -12,9 +12,10 @@
 #include<bitset>
 #include<optional>
 #include <cstdio>
+#include <string>
 
 
-#define DEBUG_PRED 1
+#define DEBUG_PRED 0
 
 namespace gold_standard {
     // Default values of 0
@@ -35,7 +36,7 @@ namespace gold_standard {
     tagged_tables_type tagged_tables;
     trainingInfo last_training_data;
     uint8_t cat;
-    lfsr<LFSR_SIZE> feedback_shift_register(0x1A2B3C4D5E6F7D8E, 0x8000100000c00001);
+    lfsr<LFSR_SIZE> feedback_shift_register(0x1A2B3C4D5E6F7D8E, 0x8000000000000001);
 
     constexpr table_parameters t1{9,9,5};   
     constexpr table_parameters t2{9,9,9};
@@ -48,6 +49,7 @@ namespace gold_standard {
     /* Remove later, debugging */
     int count = 0;
     FILE *file;
+    std::string last = "";
 
     void gold_standard_predictor::impl_initialise(){
 
@@ -77,6 +79,7 @@ namespace gold_standard {
     uint8_t gold_standard_predictor::impl_predict_branch(uint64_t ip){
         
         bool found_provider = false;
+        last = "";
         bool found_alt = false;
         int provider = 0;
         int  alt = 0;
@@ -96,6 +99,9 @@ namespace gold_standard {
             auto entry = tagged_tables[i]->access_entry(ip);
             uint32_t index = tagged_tables[i]->get_index(ip);
             indices[i] = index;
+            if(DEBUG_PRED){
+                last += "(" + std::to_string(index) + ", " + std::to_string(entry.has_value()) + "), ";
+            }
             if(entry.has_value()){
                 tagged_entry ent = entry.value();
                 uint8_t confidence = get_tagged_confidence(ent.takenCounter, ent.notTakenCounter);
@@ -115,6 +121,9 @@ namespace gold_standard {
                     alt_entry = ent;
                 }
             }
+        }
+        if(DEBUG_PRED){
+            last += "\n";
         }
 
         for(int i = tagged_tables.size()-1; i >= 0; i--){
@@ -181,6 +190,9 @@ namespace gold_standard {
         if(DEBUG_PRED) {
             fprintf(file, "UPDATE %d\n", count);
             fprintf(file, "GOLD STANDARD PRED %llu %s\n", ip, feedback_shift_register.get().to_string().c_str());
+            
+            fprintf(file, "GOLD STANDARD HISTORY %s\n", global_history.to_string().substr(245,10).c_str());
+            fprintf(file, last.c_str());
             fprintf(file, "GOLD STANDARD PREDICTS %d, Actual: %d\n", last_training_data.taken, taken);
         }
         
@@ -205,12 +217,14 @@ namespace gold_standard {
                 // Check if there exists an entry with u = 0
                 int start = last_training_data.use_bimodal ? 0 : last_training_data.pred_table+1;
                 // Small random offset, want to weight this towards 0
-                uint8_t offset = std::min(3 - ((feedback_shift_register.get().to_ulong() & (LFSR_OFFSET_MASK)) >> LFSR_OFFSET_SHIFT), (long unsigned int) SKIPMAX);
-                uint8_t mhc = 0;
+                uint8_t offset_rand = ((feedback_shift_register.get().to_ulong() & (LFSR_OFFSET_MASK)) >> LFSR_OFFSET_SHIFT);
+                uint8_t offset = 0;
+                if(offset_rand > 3 && offset_rand <= 6) offset = 1;
+                else if (offset_rand == 7) offset = 2;
 
+                uint8_t mhc = 0;
                 uint16_t decay = feedback_shift_register.get().to_ulong() & (LFSR_DECAY_MASK);
                 
-
                 if(DEBUG_PRED){
                     std::bitset<14> d(decay);
                     fprintf(file, "GOLD STANDARD ALLOCATE decay: %s, offset: %d\n", d.to_string().c_str(), offset);
@@ -225,6 +239,7 @@ namespace gold_standard {
                             replace_tab = i;
                         }else{
                             // Decay with some probability
+                            fprintf(file, "GOLD STANDARD HIGH CONFIDENCE: %d\n", i);
                             if (is_mhc(e.takenCounter, e.notTakenCounter)) mhc++;
                             if((decay >> (i*2)) & 0x3 >= DECAY_THRESH){ // 1/4 chance of decay independantly
                                 if(DEBUG_PRED){
@@ -249,6 +264,7 @@ namespace gold_standard {
                     );
                     cat = cat + 1 - 2*mhc;
                     cat = std::min((uint8_t)CATMAX, std::max((uint8_t)0, cat));
+                    cat = 0; //Turn of controlled allocation throttling
                 }
             }
         }
@@ -265,12 +281,16 @@ namespace gold_standard {
                 if(last_training_data.alt_bimodal){
                     fprintf(file, "GOLD STANDARD ALT PRED BIMODAL\n");
                     fprintf(file, "GOLD STANDARD ALT PREDICTION: %d\n", last_training_data.alt_prediction);
-                }else{
+                }else if(!last_training_data.use_bimodal){
                     fprintf(file, "GOLD STANDARD ALT PRED TABLE %d\n", last_training_data.alt_table);
                 }
-                fprintf(file, "GOLD STANDARD ALT PRED TAKEN %d\n", last_training_data.alt_prediction);
-                fprintf(file, "GOLD STANDARD PROVIDER ENTRY Table: %d Index: %d, Conf: %d, Counters: %d %d\n", last_training_data.pred_table, pred_index, last_training_data.provider_confidence, last_training_data.provider_entry.takenCounter, last_training_data.provider_entry.notTakenCounter);
-                if(!last_training_data.alt_bimodal){
+                if(!last_training_data.use_bimodal){
+                    fprintf(file, "GOLD STANDARD ALT PRED TAKEN %d\n", last_training_data.alt_prediction);
+                    fprintf(file, "GOLD STANDARD PROVIDER ENTRY Table: %d Index: %d, Conf: %d, Counters: %d %d\n", last_training_data.pred_table, pred_index, last_training_data.provider_confidence, last_training_data.provider_entry.takenCounter, last_training_data.provider_entry.notTakenCounter);                    
+                }else{
+                    fprintf(file, "GOLD STANDARD USE BIMODAL\n");
+                }
+                if(!last_training_data.alt_bimodal && !last_training_data.use_bimodal){
                     fprintf(file, "GOLD STANDARD ALT PREDICTION: %d\n", last_training_data.alt_prediction);
                     fprintf(file, "GOLD STANDARD ALT ENTRY Table: %d Index: %d, Conf: %d, Counters: %d %d\n", last_training_data.alt_table, last_training_data.alt_index, last_training_data.alt_confidence, last_training_data.alt_entry.takenCounter, last_training_data.alt_entry.notTakenCounter);
                 }
@@ -284,6 +304,9 @@ namespace gold_standard {
             else if(last_training_data.alt_prediction != branch_taken || last_training_data.provider_confidence > 0 || last_training_data.alt_confidence > 0){ // If not high confidence
                 // LOOK AT: In the text it says if alt mispredicts rather than provider mispredicts, but surely you would want to update if the provider mispredicts
                 update_dual(pred_t.takenCounter, pred_t.notTakenCounter, branch_taken, COUNTER_MAX);
+                if(DEBUG_PRED){
+                    fprintf(file, "GOLD STANDARD DUAL UPDATE 1 %d %d\n", pred_t.takenCounter, pred_t.notTakenCounter);
+                }
             }else if(last_training_data.provider_confidence == 0 && last_training_data.alt_confidence == 0 && last_training_data.alt_prediction == branch_taken){
                 decay_dual(pred_t.takenCounter, pred_t.notTakenCounter); // If evidence of uselessness
             }
