@@ -14,33 +14,28 @@
 #include <cstdio>
 
 
-#define DEBUG_PRED 0
+#define DEBUG_PRED 1
 
 namespace gold_standard {
     // Default values of 0
     
     #define COUNTER_SIZE 3
     #define COUNTER_MAX ((1 << COUNTER_SIZE) - 1)
-    #define BIMODAL_COUNTER_SIZE 2
-    #define BIMODAL_PREDICTION_BITS 13
-    #define BIMODAL_HYSTERESIS_BITS 11
+    #define BIMODAL_COUNTER_SIZE 3
 
-
-
-    constexpr uint16_t prediction_entries = (( 1 << BIMODAL_PREDICTION_BITS) / 64);
-    constexpr uint16_t hysteresis_entries = (( 1 << BIMODAL_HYSTERESIS_BITS) / 64);
+     // USE HYSTERESIS LATER
+    constexpr uint8_t bimodal_table_init (1 << (BIMODAL_COUNTER_SIZE-1));
 
     // Index size, Tag size, History length
     std::bitset<GLOBAL_SIZE> global_history;
     std::bitset<PATH_HISTORY_SIZE> path_history;
-    
 
-    std::array<uint64_t, prediction_entries> bimodal_prediction_bits;
-    std::array<uint64_t, hysteresis_entries> bimodal_hysteresis_bits;
+    std::array<uint8_t, BIMODAL_TABLE_NUM_ENTRIES> bimodal_table;
+    
     tagged_tables_type tagged_tables;
     trainingInfo last_training_data;
-    uint8_t alt_on_na;
-    lfsr<4> feedback_shift_register(9,9);
+    uint8_t cat;
+    lfsr<LFSR_SIZE> feedback_shift_register(0x1A2B3C4D5E6F7D8E, 0x8000100000c00001);
 
     constexpr table_parameters t1{9,9,5};   
     constexpr table_parameters t2{9,9,9};
@@ -73,9 +68,8 @@ namespace gold_standard {
         global_history.reset();
         path_history.reset();
         
-        // Set to weakly taken
-        bimodal_prediction_bits.fill(~(uint64_t)0);
-        bimodal_hysteresis_bits.fill(0);
+        bimodal_table.fill(bimodal_table_init);
+        cat = 0;
 
         std::cout << "Initialized\n";
     }
@@ -86,52 +80,71 @@ namespace gold_standard {
         bool found_alt = false;
         int provider = 0;
         int  alt = 0;
+        uint32_t alt_index = 0;
         tagged_entry provider_entry;
         tagged_entry alt_entry;
         
+        std::vector<uint8_t> upper_entries;
+        std::array<uint32_t, NUM_TAGGED_TABLES> indices;
+        indices.fill(0);
+
         //printf("GOLD STANDARD PREDICT %d, LSFSR %d", ip)
         uint8_t conf = 3;
         uint8_t alt_conf = 0;
         
         for(int i = tagged_tables.size()-1; i >= 0; i--){
-            
             auto entry = tagged_tables[i]->access_entry(ip);
+            uint32_t index = tagged_tables[i]->get_index(ip);
+            indices[i] = index;
             if(entry.has_value()){
-                tagged_entry& ent = entry.value();
+                tagged_entry ent = entry.value();
+                uint8_t confidence = get_tagged_confidence(ent.takenCounter, ent.notTakenCounter);
                 
-                uint8_t medium = (ent.takenCounter == (2*ent.notTakenCounter + 1)) || (ent.notTakenCounter == (2*ent.takenCounter + 1));
-                uint8_t low = (ent.takenCounter < (2*ent.notTakenCounter + 1)) || (ent.notTakenCounter < (2*ent.takenCounter + 1));
-                uint8_t confidence = 2 * low + medium;
-
                 if(confidence < conf){
                     found_provider = true;
                     found_alt = false;
                     conf = confidence;
                     provider = i;
-                    provider_entry = entry.value();
+                    provider_entry = ent;
                 }    
-                }else if(!found_alt){
+                else if(!found_alt){
                     found_alt = true;
+                    alt_index = index;
                     alt_conf = confidence;
                     alt = i;
-                    alt_entry = entry.value();
+                    alt_entry = ent;
                 }
             }
+        }
+
+        for(int i = tagged_tables.size()-1; i >= 0; i--){
+            auto entry = tagged_tables[i]->access_entry(ip);
+            if(i > provider && entry.has_value()){
+                upper_entries.push_back(i);
+            }
+        }
             debug_printf("%ld\n", ip);
         
         if(found_provider){
-            debug_printf("%d\n", provider_entry.counter);
+            debug_printf("%d\n", provider_entry.takenCounter);
         }
+
+        uint32_t bimodal_index = get_bimodal_index(ip);
+        uint8_t bimodal_counter = get_bimodal_counter(bimodal_index, bimodal_table);
+        bool bimodal_prediction = bimodal_counter >= (1 << (BIMODAL_COUNTER_SIZE-1));
+
+        last_training_data.upper_entries = upper_entries;
+        last_training_data.indices = indices;
 
         // Set up training data, half of it is not really necessary
         if(!found_provider){
             last_training_data.use_bimodal = true;
-            last_training_data.provider_prediction = access_bimodal_entry(ip) == 1;
+            last_training_data.provider_prediction = bimodal_prediction;
             //printf("GOLD STANDARD INDEX %d %d\n", get_bimodal_index(ip).first, get_bimodal_index(ip).second);
             last_training_data.taken = last_training_data.provider_prediction;
         }else{
             if(DEBUG_PRED)
-                fprintf(file,"GOLD STANDARD INDEX %d %d %d %d\n", ip, provider, tagged_tables[provider]->get_index(ip), tagged_tables[provider]->compute_tag(ip));
+                fprintf(file,"GOLD STANDARD INDEX %ld %d %d %d\n", ip, provider, tagged_tables[provider]->get_index(ip), tagged_tables[provider]->compute_tag(ip));
 
             last_training_data.use_bimodal = false;
             last_training_data.pred_table = provider;
@@ -142,19 +155,18 @@ namespace gold_standard {
 
             if(!found_alt){
                last_training_data.alt_bimodal = true;
-               last_training_data.alt_prediction = access_bimodal_entry(ip) == 1;
-               assert(false);
-               last_training_data.alt_confidence = 1; // MAKE BIMODAL 3 BITS LATER and use mapping
+               last_training_data.alt_prediction = bimodal_prediction;
+               last_training_data.alt_confidence = get_bimodal_table_confidence(bimodal_counter);
             }else{
                 last_training_data.alt_bimodal = false;
                 last_training_data.alt_table = alt;
+                last_training_data.alt_index = alt_index;
                 last_training_data.alt_confidence = alt_conf;
                 last_training_data.alt_prediction = alt_entry.takenCounter > alt_entry.notTakenCounter;
+                last_training_data.alt_entry = alt_entry;
                 // Is this also true if the alternative is bimodal?
             }
         }
-
-
         // DODGY - meant to be done each cycle
         //feedback_shift_register.next();
 
@@ -167,101 +179,145 @@ namespace gold_standard {
     // Luckily updates are immediately after the predictions
     void gold_standard_predictor::impl_last_branch_result(uint64_t ip, uint64_t target, uint8_t taken, uint8_t branch_type){        
         if(DEBUG_PRED) {
-            
             fprintf(file, "UPDATE %d\n", count);
-            fprintf(file, "GOLD STANDARD PRED %llu %llu\n", ip, feedback_shift_register.get().to_ulong());
-            fprintf(file, "GOLD STANDARD PREDICTS %d\n", last_training_data.taken);
-            fprintf(file, "GOLD STANDARD ALT_ON_NA %llu\n", alt_on_na);
+            fprintf(file, "GOLD STANDARD PRED %llu %s\n", ip, feedback_shift_register.get().to_string().c_str());
+            fprintf(file, "GOLD STANDARD PREDICTS %d, Actual: %d\n", last_training_data.taken, taken);
         }
         
         bool branch_taken = taken > 0;
-        // ********* Bimodal update
-        std::pair<uint32_t, uint32_t> bimodal_index = get_bimodal_index(ip);
-        uint8_t counter = (get_bimodal_bit(bimodal_index.first, bimodal_prediction_bits) << 1) + get_bimodal_bit(bimodal_index.second, bimodal_hysteresis_bits);
-
-        update_counter(counter, branch_taken, (1 << BIMODAL_COUNTER_SIZE)-1);
-
-        set_bimodal_bit(bimodal_index.first, (counter & 2) >> 1, bimodal_prediction_bits);
-        set_bimodal_bit(bimodal_index.second, counter & 1, bimodal_hysteresis_bits);
         bool mispred = last_training_data.taken != branch_taken;
 
+        uint32_t bimodal_index = get_bimodal_index(ip);
+        uint8_t bimodal_counter = get_bimodal_counter(bimodal_index, bimodal_table);
+
         // ******** Allocation on misprediction
-        if(last_training_data.taken != branch_taken && (last_training_data.use_bimodal || (last_training_data.pred_table < tagged_tables.size()-1))){
+        if(mispred && (last_training_data.use_bimodal || (last_training_data.pred_table < tagged_tables.size()-1))){
             // On a prediction this could be brought along rather than recalculated?
-            // CHECK
             
-            std::vector<int> replaceable_entries{};
-            // Check if there exists an entry with u = 0
-            int start = last_training_data.use_bimodal ? 0 : last_training_data.pred_table+1;
-            for(uint32_t i = start; i < tagged_tables.size(); i++){
+
+            // Decide to allocate or not
+            uint16_t random = std::min((long unsigned int)MINAP, ((feedback_shift_register.get().to_ulong() & (LFSR_ALLOCATE_MASK)) >> LFSR_ALLOCATE_SHIFT));
+            if(DEBUG_PRED)
+                fprintf(file, "GOLD STANDARD ALLOCATE RANDOM: %d, cat: %d\n", random, cat);
+
+            if(random >= ((cat*MINAP)/(CATMAX+1))){
+                int8_t replace_tab = -1;
+                // Check if there exists an entry with u = 0
+                int start = last_training_data.use_bimodal ? 0 : last_training_data.pred_table+1;
+                // Small random offset, want to weight this towards 0
+                uint8_t offset = std::min(3 - ((feedback_shift_register.get().to_ulong() & (LFSR_OFFSET_MASK)) >> LFSR_OFFSET_SHIFT), (long unsigned int) SKIPMAX);
+                uint8_t mhc = 0;
+
+                uint16_t decay = feedback_shift_register.get().to_ulong() & (LFSR_DECAY_MASK);
                 
-                int t_index = tagged_tables[i]->get_index(ip);
-                if(tagged_tables[i]->get_entry(t_index).useful_counter == 0){
-                    replaceable_entries.push_back(i);
-                }
-            }
-            // Decrement all entries https://inria.hal.science/hal-03408381/document
-            if(replaceable_entries.size() == 0){
-                for(uint32_t i = start; i < tagged_tables.size(); i++){
-                    int t_index = tagged_tables[i]->get_index(ip);
-                    tagged_entry tab = tagged_tables[i]->get_entry(t_index);
-                    update_counter(tab.useful_counter, false, U_COUNTER_MAX);
-                    tagged_tables[i]->set_entry(t_index, tab);
-                }
-            }else{
-                
-                // CHECK - Ping pong phenomenae
-                uint8_t a = feedback_shift_register.get().to_ulong() & 0x7 | feedback_shift_register.get().test(3);
-                uint32_t replace_table_index;
-                debug_printf("Random: %d\n",a);
-                if(replaceable_entries.size() == 1 || a >= 4){ // 1/2 chance
-                    replace_table_index = replaceable_entries[0];
-                } else if(replaceable_entries.size() == 2 || a >= 2) { //1/4 chance
-                    replace_table_index = replaceable_entries[1];
-                } else {
-                    replace_table_index = replaceable_entries[2];
+
+                if(DEBUG_PRED){
+                    std::bitset<14> d(decay);
+                    fprintf(file, "GOLD STANDARD ALLOCATE decay: %s, offset: %d\n", d.to_string().c_str(), offset);
                 }
 
-                if(DEBUG_PRED)
-                    fprintf(file, "GOLD STANDARD ALLOCATE FOR: %d %d %d %d\n", ip, replace_table_index, tagged_tables[replace_table_index]->get_index(ip), tagged_tables[replace_table_index]->compute_tag(ip));
-                if(replace_table_index < tagged_tables.size()){
-                    tagged_tables[replace_table_index]->allocate_entry(
+                for(uint32_t i = start+offset; i < tagged_tables.size() && replace_tab == -1; i++){
+                    int t_index = tagged_tables[i]->get_index(ip);
+                    auto entry = tagged_tables[i]->access_entry(ip);
+                    if(!entry.has_value()){ // Not upper entry
+                        tagged_entry e = tagged_tables[i]->get_entry(t_index);
+                        if(get_tagged_confidence(e.takenCounter, e.notTakenCounter) != 0){
+                            replace_tab = i;
+                        }else{
+                            // Decay with some probability
+                            if (is_mhc(e.takenCounter, e.notTakenCounter)) mhc++;
+                            if((decay >> (i*2)) & 0x3 >= DECAY_THRESH){ // 1/4 chance of decay independantly
+                                if(DEBUG_PRED){
+                                    fprintf(file, "GOLD STANDARD ALLOCATE DECAY: %d\n", i);
+                                }
+                                
+                                decay_dual(e.takenCounter, e.notTakenCounter);
+                                tagged_tables[i]->set_entry(t_index, e);
+                            }
+                        }
+                        
+                    }
+                }
+
+                if(replace_tab != -1){
+                    int index = tagged_tables[replace_tab]->get_index(ip);
+                    if(DEBUG_PRED)
+                        fprintf(file, "GOLD STANDARD ALLOCATE: table: %d, index: %d, offset: %d, mhc: %d\n", replace_tab, index, offset, mhc);
+                    tagged_tables[replace_tab]->allocate_entry(
                         ip,
                         branch_taken
                     );
-                }else{
-                    assert(false);
+                    cat = cat + 1 - 2*mhc;
+                    cat = std::min((uint8_t)CATMAX, std::max((uint8_t)0, cat));
                 }
-                
             }
         }
+        
 
         // ********* Tagged tables update
-        if(!last_training_data.use_bimodal){
+        //if(!last_training_data.use_bimodal){
             std::unique_ptr<table>& pred = tagged_tables[last_training_data.pred_table];
-            uint16_t index = pred->get_index(ip);
-            tagged_entry t = pred->get_entry(index);
+            std::unique_ptr<table>& alt_table = tagged_tables[last_training_data.alt_table];
+            uint16_t pred_index = pred->get_index(ip);
+            tagged_entry pred_t = pred->get_entry(pred_index);
             
             if(DEBUG_PRED){
                 if(last_training_data.alt_bimodal){
                     fprintf(file, "GOLD STANDARD ALT PRED BIMODAL\n");
+                    fprintf(file, "GOLD STANDARD ALT PREDICTION: %d\n", last_training_data.alt_prediction);
                 }else{
                     fprintf(file, "GOLD STANDARD ALT PRED TABLE %d\n", last_training_data.alt_table);
                 }
                 fprintf(file, "GOLD STANDARD ALT PRED TAKEN %d\n", last_training_data.alt_prediction);
-                fprintf(file, "GOLD STANDARD PROVIDER ENTRY COUNTER %d\n", t.counter);
-                fprintf(file, "GOLD STANDARD PROVIDER USEFUL COUNTER %d\n", t.useful_counter);
+                fprintf(file, "GOLD STANDARD PROVIDER ENTRY Table: %d Index: %d, Conf: %d, Counters: %d %d\n", last_training_data.pred_table, pred_index, last_training_data.provider_confidence, last_training_data.provider_entry.takenCounter, last_training_data.provider_entry.notTakenCounter);
+                if(!last_training_data.alt_bimodal){
+                    fprintf(file, "GOLD STANDARD ALT PREDICTION: %d\n", last_training_data.alt_prediction);
+                    fprintf(file, "GOLD STANDARD ALT ENTRY Table: %d Index: %d, Conf: %d, Counters: %d %d\n", last_training_data.alt_table, last_training_data.alt_index, last_training_data.alt_confidence, last_training_data.alt_entry.takenCounter, last_training_data.alt_entry.notTakenCounter);
+                }
             }
 
-            if(mispred || last_training_data.provider_confidence > 0){
-                update_dual(t.takenCounter, t.notTakenCounter, branch_taken, COUNTER_MAX);
-            }else if(last_training_data.provider_confidence == 0 && last_training_data.alt_confidence == 0 && last_training_data.alt_prediction == taken && !mispred){
-                decay_dual(t.takenCounter, t.notTakenCounter);
+            // Provider update
+            if(last_training_data.use_bimodal){ // Always update Bimodal if provider
+                update_counter(bimodal_counter, branch_taken, (1 << BIMODAL_COUNTER_SIZE)-1);
+                set_bimodal_counter(bimodal_index, bimodal_counter, bimodal_table);
+            }
+            else if(last_training_data.alt_prediction != branch_taken || last_training_data.provider_confidence > 0 || last_training_data.alt_confidence > 0){ // If not high confidence
+                // LOOK AT: In the text it says if alt mispredicts rather than provider mispredicts, but surely you would want to update if the provider mispredicts
+                update_dual(pred_t.takenCounter, pred_t.notTakenCounter, branch_taken, COUNTER_MAX);
+            }else if(last_training_data.provider_confidence == 0 && last_training_data.alt_confidence == 0 && last_training_data.alt_prediction == branch_taken){
+                decay_dual(pred_t.takenCounter, pred_t.notTakenCounter); // If evidence of uselessness
             }
 
-            // Need more updates...
-            pred->set_entry(index, t);
-        }
+            if(!last_training_data.use_bimodal){
+                pred->set_entry(pred_index, pred_t);
+            }
+            
+            // Alt update
+            if(!last_training_data.use_bimodal && last_training_data.provider_confidence != 0){
+                if(last_training_data.alt_bimodal){ //Bimodal
+                    update_counter(bimodal_counter, branch_taken, (1 << BIMODAL_COUNTER_SIZE)-1);
+                    set_bimodal_counter(bimodal_index, bimodal_counter, bimodal_table);
+                }else{ //Tagged
+                    tagged_entry alt = last_training_data.alt_entry;
+                    update_dual(alt.takenCounter, alt.notTakenCounter, taken, COUNTER_MAX);
+                    alt_table->set_entry(last_training_data.alt_index, alt);
+                }
+            }
+
+            //Others update
+            for(uint8_t i = 0; i < last_training_data.upper_entries.size(); i++){
+                uint8_t table_ind = last_training_data.upper_entries[i];
+                std::unique_ptr<table>& upper_table = tagged_tables[table_ind];
+                uint16_t index = upper_table->get_index(ip);
+                tagged_entry t = upper_table->get_entry(index);
+
+                update_dual(t.takenCounter, t.notTakenCounter, taken, COUNTER_MAX);
+                upper_table->set_entry(index, t);
+                if(DEBUG_PRED){
+                    fprintf(file, "GOLD STANDARD UPPER UPDATE Table: %d Index: %d\n", table_ind, index);
+                }
+            }
+        //}
 
         // TODO - Add reset here
         
@@ -294,49 +350,30 @@ namespace gold_standard {
 // Functions relatingg to Bimodal predictor
 
     template <uint64_t size>
-    uint8_t get_bimodal_bit(uint32_t index, std::array<uint64_t,size>& bimodal_table){
-        uint32_t i = index / 64;
-        uint16_t offset = index % 64;
-        uint64_t mask = (uint64_t(1) << offset);
-        return (bimodal_table[i] & mask) >> offset;
+    uint8_t get_bimodal_counter(uint32_t index, std::array<uint8_t, size>& bimodal){
+        return bimodal[index];
     }
 
     template <uint64_t size>
-    void set_bimodal_bit(uint32_t index, uint8_t bit, std::array<uint64_t,size>& bimodal_table){
-        uint32_t i = index / 64;
-        uint16_t offset = index % 64;
-        //printf("%d %d\n", bit, offset);
-        //std::cout << std::bitset<64>(bimodal_table[i]) << std::endl;
-        
-        uint64_t mask = ~( uint64_t(1) << offset);
-        uint64_t bit_mask = (uint64_t(bit) << offset);
-        
-        //std::cout << std::bitset<64>(bimodal_table[i]) << std::endl;
-        bimodal_table[i] &= mask;
-        bimodal_table[i] |= bit_mask;
-        //std::cout << std::bitset<64>(bimodal_table[i]) << std::endl;
-        //sleep(2);
+    void set_bimodal_counter(uint32_t index, uint8_t counter, std::array<uint8_t, size>& bimodal){
+        bimodal[index] = counter;
     }
 
-    std::pair<uint32_t, uint32_t> get_bimodal_index(uint64_t pc){
-        
+    uint32_t get_bimodal_index(uint64_t pc){    
         uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5);
-        
-        uint64_t mask1 = (1 << BIMODAL_PREDICTION_BITS) - 1;
-        uint64_t mask2 = ((1 << BIMODAL_HYSTERESIS_BITS) - 1);
-
-        uint32_t prediction_index = mask1 & combined;
-        uint32_t hysteresis_index = mask2 & (combined >> (BIMODAL_PREDICTION_BITS - BIMODAL_HYSTERESIS_BITS));
-        //printf("Indices %d %d\n",prediction_index, hysteresis_index);
-        //printf("GOLD STANDARD %d %d\n", prediction_index, hysteresis_index);
-        return {prediction_index, hysteresis_index};
+        uint64_t mask = (1 << BIMODAL_TABLE_SIZE) - 1;
+        uint32_t prediction_index = mask & combined;
+        return prediction_index;
     }
 
-    uint8_t access_bimodal_entry(uint64_t pc){
-        uint32_t prediction_index = get_bimodal_index(pc).first;
-        return get_bimodal_bit(prediction_index, bimodal_prediction_bits);
+    uint8_t get_bimodal_table_confidence(uint8_t counter){
+        if(counter == 3 || counter == 4)
+            return 2;
+        else if(counter == 2 || counter == 5)
+            return 1;
+        else
+            return 0;
     }
-
 
 
 // **********************************************************
@@ -370,11 +407,12 @@ namespace gold_standard {
         int index = get_index(pc);
         tagged_entry t;
         t.tag = compute_tag(pc);
-        t.useful_counter = 0;
         if(taken){
-            t.counter = WEAK_TAKEN;
+            t.takenCounter = 1;
+            t.notTakenCounter = 0;
         }else{
-            t.counter = WEAK_NOT_TAKEN;
+            t.takenCounter = 0;
+            t.notTakenCounter = 1;
         }
         set_entry(index, t);
     }
@@ -409,7 +447,7 @@ namespace gold_standard {
         //uint16_t tag = (pc & mask) ^ (pc >> (5 + params.tag_size) & mask) ^ folded_tag.to_ulong();
         uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5) ^ folded_history.to_ulong();
         uint64_t mask = ((uint64_t(1) << params.tag_size)-1);
-        uint16_t tag = (pc & mask) ^ (combined >> params.index_size) & mask;
+        uint16_t tag = (pc & mask) ^ ((combined >> params.index_size) & mask);
         return tag;
     }
 

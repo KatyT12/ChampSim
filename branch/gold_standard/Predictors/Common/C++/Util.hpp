@@ -67,14 +67,6 @@ namespace gold_standard {
     using tagged_tables_type = std::vector<std::unique_ptr<table>>;
 
 
-    uint8_t access_bimodal_entry(uint64_t pc);
-    std::pair<uint32_t, uint32_t> get_bimodal_index(uint64_t pc);
-    
-    template <uint64_t size>
-    uint8_t get_bimodal_bit(uint32_t index, std::array<uint64_t, size>& bimodal_table);
-    template <uint64_t size>
-    void set_bimodal_bit(uint32_t index, uint8_t bit, std::array<uint64_t, size>& bimodal_table);
-
     void update_counter(uint8_t& counter, bool increment, uint8_t limit){
         if(increment){
             counter = std::min(limit, uint8_t(counter+1));

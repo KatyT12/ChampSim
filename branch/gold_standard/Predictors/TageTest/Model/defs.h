@@ -27,4 +27,11 @@ namespace gold_standard {
     } trainingInfo;
 
     #define DEFAULT_VALUE tagged_entry{0,0,TAGE_PRED_CTR_INIT}
+
+    std::pair<uint32_t, uint32_t> get_bimodal_index(uint64_t pc);
+    uint8_t access_bimodal_entry(uint64_t pc);
+    template <uint64_t size>
+    uint8_t get_bimodal_bit(uint32_t index, std::array<uint64_t, size>& bimodal_table);
+    template <uint64_t size>
+    void set_bimodal_bit(uint32_t index, uint8_t bit, std::array<uint64_t, size>& bimodal_table);
 }
