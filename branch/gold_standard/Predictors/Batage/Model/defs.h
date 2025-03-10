@@ -25,8 +25,8 @@ namespace gold_standard {
     #define LFSR_ALLOCATE_MASK 0x00d0000 // 3 bits
     #define LFSR_ALLOCATE_SHIFT 17
 
-    #define MINAP 7
-    #define CATMAX 32
+    #define MINAP 8
+    #define CATMAX 8192
     #define SKIPMAX 2
     
 

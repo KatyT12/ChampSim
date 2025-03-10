@@ -13,6 +13,7 @@
 #include<optional>
 #include <cstdio>
 #include <string>
+#include <cstdlib>
 
 
 #define DEBUG_PRED 0
@@ -35,7 +36,7 @@ namespace gold_standard {
     
     tagged_tables_type tagged_tables;
     trainingInfo last_training_data;
-    uint8_t cat;
+    int32_t cat;
     lfsr<LFSR_SIZE> feedback_shift_register(0x1A2B3C4D5E6F7D8E, 0x8000000000000001);
 
     constexpr table_parameters t1{9,9,5};   
@@ -94,6 +95,10 @@ namespace gold_standard {
         //printf("GOLD STANDARD PREDICT %d, LSFSR %d", ip)
         uint8_t conf = 3;
         uint8_t alt_conf = 0;
+
+        uint32_t bimodal_index = get_bimodal_index(ip);
+        uint8_t bimodal_counter = get_bimodal_counter(bimodal_index, bimodal_table);
+        bool bimodal_prediction = bimodal_counter >= (1 << (BIMODAL_COUNTER_SIZE-1));
         
         for(int i = tagged_tables.size()-1; i >= 0; i--){
             auto entry = tagged_tables[i]->access_entry(ip);
@@ -125,6 +130,11 @@ namespace gold_standard {
         if(DEBUG_PRED){
             last += "\n";
         }
+       
+        if(get_bimodal_table_confidence(bimodal_counter) < conf){
+            found_provider = false; // Use bimodal
+            provider = -1;
+        }
 
         for(int i = tagged_tables.size()-1; i >= 0; i--){
             auto entry = tagged_tables[i]->access_entry(ip);
@@ -138,9 +148,7 @@ namespace gold_standard {
             debug_printf("%d\n", provider_entry.takenCounter);
         }
 
-        uint32_t bimodal_index = get_bimodal_index(ip);
-        uint8_t bimodal_counter = get_bimodal_counter(bimodal_index, bimodal_table);
-        bool bimodal_prediction = bimodal_counter >= (1 << (BIMODAL_COUNTER_SIZE-1));
+        
 
         last_training_data.upper_entries = upper_entries;
         last_training_data.indices = indices;
@@ -208,11 +216,13 @@ namespace gold_standard {
             
 
             // Decide to allocate or not
-            uint16_t random = std::min((long unsigned int)MINAP, ((feedback_shift_register.get().to_ulong() & (LFSR_ALLOCATE_MASK)) >> LFSR_ALLOCATE_SHIFT));
+            // CHANGE LATER
+            uint16_t random = rand() % 8; //std::min((long unsigned int)MINAP, ((feedback_shift_register.get().to_ulong() & (LFSR_ALLOCATE_MASK)) >> LFSR_ALLOCATE_SHIFT));
             if(DEBUG_PRED)
                 fprintf(file, "GOLD STANDARD ALLOCATE RANDOM: %d, cat: %d\n", random, cat);
 
-            if(random >= ((cat*MINAP)/(CATMAX+1))){
+            uint64_t thresh = ((uint64_t)cat*MINAP)/((uint64_t)CATMAX+1);
+            if(random >= thresh){
                 int8_t replace_tab = -1;
                 // Check if there exists an entry with u = 0
                 int start = last_training_data.use_bimodal ? 0 : last_training_data.pred_table+1;
@@ -241,7 +251,7 @@ namespace gold_standard {
                             // Decay with some probability
                             fprintf(file, "GOLD STANDARD HIGH CONFIDENCE: %d\n", i);
                             if (is_mhc(e.takenCounter, e.notTakenCounter)) mhc++;
-                            if((decay >> (i*2)) & 0x3 >= DECAY_THRESH){ // 1/4 chance of decay independantly
+                            if(rand() % 2 == 0/*(decay >> (i*2)) & 0x3 >= DECAY_THRESH*/){ // 1/4 chance of decay independantly
                                 if(DEBUG_PRED){
                                     fprintf(file, "GOLD STANDARD ALLOCATE DECAY: %d\n", i);
                                 }
@@ -262,9 +272,13 @@ namespace gold_standard {
                         ip,
                         branch_taken
                     );
-                    cat = cat + 1 - 2*mhc;
-                    cat = std::min((uint8_t)CATMAX, std::max((uint8_t)0, cat));
-                    cat = 0; //Turn of controlled allocation throttling
+                    cat = cat + 3 - 4*mhc;
+                    cat = std::min((int32_t)CATMAX, std::max((int32_t)0, cat));
+
+                    /*if(count % 10 == 0){
+                        printf("count %d, cat: %d, rand: %d, thresh: %d, CATMAX: %d\n",count, cat, random, thresh, CATMAX);
+                    }*/
+                    //cat = 0; //Turn of controlled allocation throttling
                 }
             }
         }
