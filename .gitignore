@@ -15,6 +15,8 @@ bin/
 
 test/000-test-main
 
+traces/
+
 tracer/pin/obj-intel64/
 
 vcpkg_installed/

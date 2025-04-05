@@ -27,7 +27,7 @@ typedef union tagged{
 (* synthesize *)
 module mkTestbench(Empty);
     
-
+    Reg#(UInt#(64)) count <- mkReg(0);
     Reg#(Bit#(8)) prediction <- mkReg(0);
     Reg#(Message) message <- mkReg(?);
     Reg#(Bool) debug <- mkReg(?);
@@ -77,7 +77,10 @@ module mkTestbench(Empty);
     endfunction
 
     function Action debugUpdate(BranchUpdateInfo b);
-      $display("BSV Update IP: %d, target : %d, taken: %d, Type %d:", b.ip, b.target, b.taken, b.branch_type);
+      action
+        $display("BLUESPEC PRED COUNT %d\n", count);
+        $display("BSV Update IP: %d, target : %d, taken: %d, Type %d:", b.ip, b.target, b.taken, b.branch_type);
+      endaction
     endfunction
 
     function Action debugPredictionReq(Address ip);
@@ -112,6 +115,7 @@ module mkTestbench(Empty);
               endseq
               if (!isPred(message)) seq
                 update(message.UpdateReq);
+                count <= count + 1;
                 if(debug) debugUpdate(message.UpdateReq);
               endseq
             endseq
