@@ -58,7 +58,7 @@ void branch_update_req(unsigned int* res, unsigned char* buff){
   // For Bluespec
   res[0] = res[0] | (ret.ip & 0xFFFFFFFF) << 2; // 30
   res[1] = (ret.ip & 0x3FFFFFFFD0000000) >> 30;
-  res[2] = ((ret.ip & 0xD000000000000000) >> 30) | ((ret.target & 0xFFFFFFFF) << 2);
+  res[2] = ((ret.ip & 0xD000000000000000) >> 62) | ((ret.target & 0xFFFFFFFF) << 2);
   res[3] = (ret.target & 0x3FFFFFFFD0000000) >> 32;
   res[4] = ((ret.target & 0xD000000000000000) >> 30) | (ret.branch_type << 10) | (ret.taken << 2);
 }
