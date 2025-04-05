@@ -39,8 +39,9 @@ void set_file_descriptors(){
 void branch_pred_req(unsigned int* res, unsigned char* buff){
   __uint64_t ip = to_long(buff);
   res[0] = res[0] | (ip << 2);
-  res[1] = (ip & 0x3FFFFFFFD0000000) >> 32;
-  res[2] = (ip & 0xD000000000000000) >> 30;
+//  res[1] = (ip & 0x3FFFFFFFD0000000) >> 32;
+  res[1] = (ip & 0x3FFFFFFFD0000000) >> 30;
+  res[2] = (ip & 0xD000000000000000) >> 62;
 }
 
 void branch_update_req(unsigned int* res, unsigned char* buff){
@@ -56,7 +57,7 @@ void branch_update_req(unsigned int* res, unsigned char* buff){
   ret.branch_type = buff[17] - '0';      
   // For Bluespec
   res[0] = res[0] | (ret.ip & 0xFFFFFFFF) << 2; // 30
-  res[1] = (ret.ip & 0x3FFFFFFFD0000000) >> 32;
+  res[1] = (ret.ip & 0x3FFFFFFFD0000000) >> 30;
   res[2] = ((ret.ip & 0xD000000000000000) >> 30) | ((ret.target & 0xFFFFFFFF) << 2);
   res[3] = (ret.target & 0x3FFFFFFFD0000000) >> 32;
   res[4] = ((ret.target & 0xD000000000000000) >> 30) | (ret.branch_type << 10) | (ret.taken << 2);
