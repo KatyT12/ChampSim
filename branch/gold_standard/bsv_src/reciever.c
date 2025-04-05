@@ -39,8 +39,8 @@ void set_file_descriptors(){
 void branch_pred_req(unsigned int* res, unsigned char* buff){
   __uint64_t ip = to_long(buff);
   res[0] = res[0] | (ip << 2);
-  res[1] = ip & 0x3FFFFFFFD0000000;
-  res[2] = ip & 0xD000000000000000 >> 30;
+  res[1] = (ip & 0x3FFFFFFFD0000000) >> 32;
+  res[2] = (ip & 0xD000000000000000) >> 30;
 }
 
 void branch_update_req(unsigned int* res, unsigned char* buff){
