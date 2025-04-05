@@ -3,7 +3,8 @@
 
 #include "../../../include/gold_standard.hpp"
 #include "../../../include/Components/lfsr.hpp"
-#include "Util.hpp"
+#include "defs.h"
+#include "../../Common/C++/Util.hpp"
 
 #include <unistd.h>
 #include <iostream>
@@ -11,6 +12,7 @@
 #include<bitset>
 #include<optional>
 #include <cstdio>
+
 
 
 /*
@@ -437,7 +439,7 @@ namespace gold_standard {
     template<const table_parameters& params>
     uint16_t tagged_table<params>::compute_tag(uint64_t pc){
         //uint16_t tag = (pc & mask) ^ (pc >> (5 + params.tag_size) & mask) ^ folded_tag.to_ulong();
-        uint64_t combined = pc ^ (pc >> 2) ^ (pc >> 5) ^ folded_history.to_ulong();
+        uint64_t combined = (pc ^ (pc >> 2) ^ (pc >> 5)) ^ folded_history.to_ulong();
         uint64_t mask = ((uint64_t(1) << params.tag_size)-1);
         uint16_t tag = (pc & mask) ^ (combined >> params.index_size) & mask;
         return tag;
